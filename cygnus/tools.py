@@ -1,13 +1,7 @@
-import json
-import sqlite3
 import uuid
-from contextlib import closing
-from pathlib import Path
 from typing import Optional
 
 from google.adk.tools import ToolContext
-
-DB_PATH = Path(__file__).parent / "requirements.db"
 
 REQUIRED_FIELDS = [
     "event_type",
@@ -112,16 +106,16 @@ def get_requirements_summary(tool_context: ToolContext) -> dict:
 
 
 def _save_requirements(requirements: dict) -> str:
+    """Saves the approved requirements and enqueues a job for the engine agent.
+
+    Delegates to the shared engine store (``engine_agent.db``), which persists the
+    requirements and adds a 'pending' job the cron picks up. Imported lazily so the
+    chatbot doesn't pull in the engine/LLM stack until an approval actually happens.
+    """
+    from engine_agent import db as engine_db
+
     request_id = str(uuid.uuid4())
-    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS event_requirements ("
-            "requestid TEXT PRIMARY KEY, requirements TEXT NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO event_requirements (requestid, requirements) VALUES (?, ?)",
-            (request_id, json.dumps(requirements)),
-        )
+    engine_db.register_request(request_id, requirements)
     return request_id
 
 
@@ -159,7 +153,7 @@ def record_approval(
     if approved:
         try:
             request_id = _save_requirements(requirements)
-        except sqlite3.Error as e:
+        except Exception as e:
             return {"status": "error", "message": f"Failed to save requirements: {e}"}
 
     tool_context.state["approval_status"] = "approved" if approved else "changes_requested"
@@ -172,3 +166,28 @@ def record_approval(
         "request_id": request_id,
         "requirements": requirements,
     }
+
+
+def get_request_status(request_id: str) -> dict:
+    """Looks up the status and results for a previously submitted request.
+
+    Use this when the user asks about an existing request by its request ID. It
+    reports where the request is in processing and, once finished, the final
+    ranked summary and the per-vendor results.
+
+    Args:
+        request_id: The request ID the user was given when their requirements
+            were approved.
+
+    Returns:
+        The processing status and, if available, the final summary and ranking.
+    """
+    from engine_agent import db as engine_db
+
+    result = engine_db.get_request_result(request_id)
+    if result is None:
+        return {
+            "status": "not_found",
+            "message": f"No request found with ID {request_id}.",
+        }
+    return {"status": "success", **result}
