@@ -10,10 +10,12 @@ message such as "Process request <request_id>".
 """
 
 from google.adk.agents import Agent
-from google.adk.models.anthropic_llm import AnthropicGenerateContentConfig, AnthropicLlm
+
+from agent_models import build_model
 
 from .tools import (
     call_vendors,
+    discover_vendors,
     get_past_calls,
     match_vendors,
     save_final_summary,
@@ -29,10 +31,15 @@ order, using your tools, and do not ask the user questions — act autonomously.
 Call `get_past_calls(request_id)`. If vendors already have completed calls (e.g.
 this job is a retry), you'll reuse them and only call the ones still missing.
 
-## Step 2: Match vendors
-Call `match_vendors(request_id)` to get the best-fit vendors for the request's
-requirements. If it returns no candidates or an error, call
-`save_final_summary` with a short explanation, an empty ranking, and stop.
+## Step 2: Find vendors (discover nearby/trending first)
+First call `discover_vendors(request_id)`. It searches the web for real
+restaurants and cafes near the request's location, including what's popular and
+trending, and returns candidate venues.
+- If it returns `status: "success"`, use those vendor ids.
+- If it returns `status: "unavailable"` or `"no_results"` (e.g. search isn't
+  configured), fall back to `match_vendors(request_id)` and use its vendor ids.
+- If both yield no candidates or an error, call `save_final_summary` with a short
+  explanation, an empty ranking, and stop.
 
 ## Step 3: Call the vendors in parallel
 Call `call_vendors(request_id, vendor_ids)` with the vendor ids from step 2
@@ -56,17 +63,19 @@ request has been processed and summarised. Keep your narration between tool call
 short.
 """
 
+_model, _config = build_model("medium")
 root_agent = Agent(
     name="engine_agent",
     description=(
         "Processes one vendor request: matches vendors, calls them in parallel, "
         "and produces a ranked cross-vendor summary."
     ),
-    model=AnthropicLlm(model="claude-opus-5-5"),
-    generate_content_config=AnthropicGenerateContentConfig(effort="medium"),
+    model=_model,
+    generate_content_config=_config,
     instruction=INSTRUCTION,
     tools=[
         get_past_calls,
+        discover_vendors,
         match_vendors,
         call_vendors,
         save_vendor_summary,

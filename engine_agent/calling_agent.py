@@ -14,13 +14,13 @@ import json
 import uuid
 
 from google.adk.agents import Agent
-from google.adk.models.anthropic_llm import AnthropicGenerateContentConfig, AnthropicLlm
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
+from agent_models import build_model
+
 # A lighter effort than the engine: each call is a bounded, scripted conversation.
-_MODEL = AnthropicLlm(model="claude-opus-5-5")
-_CONFIG = AnthropicGenerateContentConfig(effort="low")
+_MODEL, _CONFIG = build_model("low")
 
 APP_NAME = "vendor_calling_agent"
 
@@ -38,8 +38,15 @@ Conduct a natural, concise phone conversation that:
 
 Play BOTH sides of the call realistically: the vendor answers from its profile
 (availability, what it offers, rough pricing for its price tier) and may not be
-able to meet every requirement. Do not invent features the vendor's profile does
-not list; if asked about something it lacks, the vendor says so.
+able to meet every requirement.
+- Don't contradict the profile's listed features.
+- For a seeded catalog venue, if asked about a feature it clearly does NOT list,
+  the vendor says it can't offer that.
+- For a web-discovered venue (source = "web"), the profile is partial — its full
+  capabilities aren't all known. For details not in the profile, give a plausible
+  answer based on the venue's description/cuisine, or say the vendor will confirm
+  and follow up. Don't flatly deny things just because they're missing from a
+  partial profile.
 
 Output format — the transcript only, no preamble or commentary:
 Agent: ...
@@ -71,12 +78,46 @@ def _call_prompt(vendor: dict, requirements: dict) -> str:
     )
 
 
+def _spoken_script(vendor: dict, requirements: dict) -> str:
+    """A short TTS inquiry read aloud to the vendor on a real call."""
+    req = requirements
+    must = ", ".join(req.get("must_haves") or []) or "catering"
+    return (
+        f"Hello, this is an event planning assistant calling on behalf of a client. "
+        f"We're organising a {req.get('event_type', 'event')} for about "
+        f"{req.get('guest_count', 'some')} guests in {req.get('location', 'your area')} "
+        f"on {req.get('date', 'a date to be confirmed')}, with a budget of "
+        f"{req.get('budget', 'a flexible budget')}. We're considering {vendor.get('name', 'your venue')}. "
+        f"We need {must}. Could you tell us about your availability, whether you can "
+        f"meet these needs, and rough pricing?"
+    )
+
+
 async def run_call(vendor: dict, requirements: dict) -> str:
     """Runs one vendor call to completion and returns the transcript text.
 
-    Each call gets its own in-memory runner and session, so calls are fully
-    independent and safe to run concurrently.
+    If Twilio is configured, this places a REAL phone call (speaks the inquiry,
+    records and transcribes the reply). Otherwise it falls back to a simulated
+    transcript. Each simulated call gets its own in-memory runner and session, so
+    calls are fully independent and safe to run concurrently.
     """
+    from . import telephony
+
+    if telephony.is_configured():
+        to = telephony.override_number() or vendor.get("phone")
+        if to:
+            script = _spoken_script(vendor, requirements)
+            res = await telephony.place_call(to, script)
+            if res.get("status") == "error":
+                return f"[Real call to {to} could not be placed: {res.get('error')}]"
+            reply = res.get("reply_text") or "(no spoken reply captured)"
+            return (
+                f"[Real phone call to {to} via Twilio — status: {res.get('status')}]\n"
+                f"Agent (spoken): {script}\n"
+                f"Vendor (spoken reply): {reply}"
+            )
+        # No number to dial -> fall through to simulation.
+
     runner = InMemoryRunner(agent=build_calling_agent(), app_name=APP_NAME)
     user_id = "engine"
     session_id = f"call-{vendor['id']}-{uuid.uuid4().hex[:8]}"

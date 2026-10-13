@@ -1,0 +1,23 @@
+# Secrets / environment
+.env
+.env.example
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local databases
+*.db
+
+# ADK local state
+.adk/
+
+# Local state (databases, caches, ADK sessions) — not source
+__pycache__/
+*.py[cod]
+*.db
+.adk/

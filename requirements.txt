@@ -12,3 +12,11 @@ pydantic==2.13.5
 
 # Loads .env (ANTHROPIC_API_KEY, VENDOR_DB_PATH) for cron/backend/agents
 python-dotenv==1.2.3
+# Real phone calls (calling agent)
+twilio==9.11.2
+# Firestore DB (Cloud Run / GCP). Pin opentelemetry-api to keep google-adk happy.
+google-cloud-firestore==2.34.1
+opentelemetry-api==1.42.1
+
+# Test-only: in-memory Firestore for local validation (no GCP needed)
+mock-firestore==0.11.0

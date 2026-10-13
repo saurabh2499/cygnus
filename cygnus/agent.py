@@ -1,5 +1,6 @@
 from google.adk.agents import Agent
-from google.adk.models.anthropic_llm import AnthropicGenerateContentConfig, AnthropicLlm
+
+from agent_models import build_model
 
 from .tools import (
     get_request_status,
@@ -67,12 +68,12 @@ If no request is found for the ID, tell the user you couldn't find it and
 double-check the ID with them.
 """
 
+_model, _config = build_model("medium")
 root_agent = Agent(
     name="event_requirements_agent",
     description="Gathers event requirements from the user, summarizes them, and gets approval.",
-    model=AnthropicLlm(model="claude-opus-5-5"),
-    # Opus 5.5 defaults to "medium" effort; set it explicitly so it's visible.
-    generate_content_config=AnthropicGenerateContentConfig(effort="medium"),
+    model=_model,
+    generate_content_config=_config,
     instruction=INSTRUCTION,
     tools=[
         update_requirements,

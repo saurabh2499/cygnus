@@ -14,7 +14,7 @@ matching, orchestration, and persistence.
 
 import asyncio
 
-from . import db
+from . import db, discovery
 from .calling_agent import run_call
 
 # Max vendor calls to run concurrently, to bound load on the model backend.
@@ -58,6 +58,64 @@ def get_past_calls(request_id: str) -> dict:
             for c in calls
         ],
     }
+
+
+def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> dict:
+    """Finds candidate venues for the request's location.
+
+    Location-aware with caching: if this location has been searched before, it
+    reuses the venues cached in the DB (no web search). Only a *new* location
+    triggers a live web search (nearby + trending restaurants/cafes). Caches new
+    results so the next request for the same location is a pure DB lookup.
+
+    Prefer this over ``match_vendors`` for real requests; if it reports the search
+    backend is unavailable or finds nothing, fall back to ``match_vendors``.
+
+    Args:
+        request_id: The request whose location/requirements drive the lookup.
+        limit: Max candidate venues to return.
+
+    Returns:
+        The candidate vendors (with ids) and a ``source`` of "cache" (known
+        location, from DB) or "web" (new location, freshly searched); or a status
+        explaining why discovery was skipped so you can fall back to the catalog.
+    """
+    db.init_db()
+    requirements = db.get_requirements(request_id)
+    if requirements is None:
+        return {"status": "error",
+                "message": f"No approved requirements found for request {request_id}."}
+    location = requirements.get("location")
+    if not location:
+        return {"status": "error", "message": "Request has no location to search near."}
+    norm = location.strip().lower()
+
+    def _payload(vendors, source):
+        return {
+            "status": "success", "source": source, "request_id": request_id,
+            "location": location, "candidate_count": len(vendors),
+            "vendors": [
+                {"vendor_id": v["id"], "name": v["name"], "area": v.get("area"),
+                 "features": v["features"], "why": v.get("description"),
+                 "source_url": v.get("source_url")}
+                for v in vendors
+            ],
+        }
+
+    # Known location -> reuse cached venues from the DB, no web search.
+    cached = db.get_web_vendors_for_location(norm)
+    if cached:
+        return _payload(cached[:limit], source="cache")
+
+    # New location -> live web search, then cache for next time.
+    result = discovery.discover(location, requirements, limit=limit)
+    if result.get("status") != "success":
+        return result  # 'unavailable' / 'no_results' -> engine falls back
+
+    for v in result["vendors"]:
+        v["search_location"] = norm
+        db.upsert_vendor(v)
+    return _payload(result["vendors"], source="web")
 
 
 def match_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> dict:

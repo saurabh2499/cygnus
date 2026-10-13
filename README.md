@@ -112,6 +112,9 @@ override with the `VENDOR_DB_PATH` environment variable.
 
 ## Getting Started
 
+> For detailed run **and validation** steps (including an offline check script and
+> an end-to-end test), see [RUNBOOK.md](RUNBOOK.md).
+
 ### Prerequisites
 
 - Python 3.11+ (developed on 3.14).
