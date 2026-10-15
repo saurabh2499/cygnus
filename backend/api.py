@@ -241,51 +241,93 @@ def healthz() -> dict:
 # --------------------------------------------------------------------------- #
 
 def _xml(body: str) -> Response:
-    return Response(content=body, media_type="application/xml")
+    return Response(content='<?xml version="1.0" encoding="UTF-8"?>' + body,
+                    media_type="application/xml")
+
+
+def _say(text: str) -> str:
+    from xml.sax.saxutils import escape
+    voice = os.environ.get("TWILIO_VOICE", "alice")
+    lang = os.environ.get("TWILIO_LANGUAGE", "en-US")
+    return f'<Say voice="{voice}" language="{lang}">{escape(text)}</Say>'
+
+
+def _ask(token: str, question: str) -> str:
+    """A <Gather> that asks one question and waits for the vendor's answer.
+
+    `timeout` is how long to wait for them to START speaking (default 5s is too
+    short when someone pauses to think); `speechTimeout=auto` ends on their pause.
+    On silence the <Redirect> re-enters /twiml/turn, which re-asks once before
+    moving on."""
+    from xml.sax.saxutils import escape
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    turn = escape(f"{base}/twiml/turn?token={token}")
+    wait = os.environ.get("TWILIO_GATHER_TIMEOUT", "10")
+    return (
+        f'<Gather input="speech" speechTimeout="auto" timeout="{wait}" '
+        f'method="POST" action="{turn}">'
+        f"{_say(question)}</Gather>"
+        f'<Redirect method="POST">{turn}</Redirect>'
+    )
 
 
 @app.api_route("/twiml/call", methods=["GET", "POST"], include_in_schema=False)
 async def twiml_call(request: Request) -> Response:
-    """Returns the TwiML for a vendor call: speak the inquiry, then gather a reply."""
-    from xml.sax.saxutils import escape
-
+    """Starts the call: greet, then ask the first requirement question."""
     token = request.query_params.get("token", "")
-    script = request.query_params.get("script", "Hello, this is an event planning assistant.")
-    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
-    voice = os.environ.get("TWILIO_VOICE", "alice")
-    lang = os.environ.get("TWILIO_LANGUAGE", "en-US")
-    action = f"{base}/twiml/collect?token={token}"
-    return _xml(
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        "<Response>"
-        f'<Say voice="{voice}" language="{lang}">{escape(script)}</Say>'
-        f'<Gather input="speech" speechTimeout="auto" method="POST" action="{escape(action)}">'
-        f'<Say voice="{voice}" language="{lang}">Please tell us about your availability '
-        "and pricing after the tone.</Say>"
-        "</Gather>"
-        f'<Say voice="{voice}" language="{lang}">Thank you. We will follow up by email. Goodbye.</Say>'
-        "</Response>"
-    )
+    st = db.get_call_state(token)
+    if not st or not st.get("questions"):
+        return _xml(f"<Response>{_say('Sorry, there was a problem. Goodbye.')}<Hangup/></Response>")
+    return _xml(f"<Response>{_say(st['greeting'])}{_ask(token, st['questions'][0])}</Response>")
 
 
-@app.api_route("/twiml/collect", methods=["GET", "POST"], include_in_schema=False)
-async def twiml_collect(request: Request) -> Response:
-    """Receives the vendor's recognised speech and stores it against the token."""
-    from xml.sax.saxutils import escape
-
+@app.api_route("/twiml/turn", methods=["GET", "POST"], include_in_schema=False)
+async def twiml_turn(request: Request) -> Response:
+    """Records the answer to the current question and asks the next one, until done."""
     token = request.query_params.get("token", "")
+    st = db.get_call_state(token)
+    if not st:
+        return _xml(f"<Response>{_say('Thank you. Goodbye.')}<Hangup/></Response>")
+
     speech = ""
     try:
         form = await request.form()
-        speech = form.get("SpeechResult", "") or ""
+        speech = (form.get("SpeechResult", "") or "").strip()
     except Exception:
         pass
-    if token and speech:
-        db.set_call_reply(token, speech)
-    voice = os.environ.get("TWILIO_VOICE", "alice")
-    lang = os.environ.get("TWILIO_LANGUAGE", "en-US")
-    return _xml(
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        f'<Response><Say voice="{voice}" language="{lang}">'
-        f'{escape("Thank you, that is all we need. Goodbye.")}</Say></Response>'
-    )
+
+    questions = st.get("questions", [])
+    idx = st.get("idx", 0)
+
+    # Silence on the current question: re-ask once before giving up on it, so a
+    # pause doesn't skip the question or end the call prematurely.
+    if not speech and idx < len(questions):
+        if not st.get("retried"):
+            st["retried"] = True
+            db.set_call_state(token, st)
+            return _xml(
+                f"<Response>{_say('Sorry, I did not catch that.')}"
+                f"{_ask(token, questions[idx])}</Response>")
+
+    # Record the answer (or '(no response)' after a retry) and advance.
+    if idx < len(questions):
+        st.setdefault("answers", []).append(
+            {"q": questions[idx], "a": speech or "(no response)"})
+        idx += 1
+        st["idx"] = idx
+        st["retried"] = False
+
+    if idx < len(questions):
+        db.set_call_state(token, st)
+        ack = "Got it. " if speech else ""
+        return _xml(f"<Response>{_say(ack + 'Next question.')}{_ask(token, questions[idx])}</Response>")
+
+    # All requirements covered — finish and store the transcript.
+    lines = [f"Agent: {st.get('greeting','')}".strip()]
+    for qa in st.get("answers", []):
+        lines += [f"Agent: {qa['q']}", f"Vendor: {qa['a']}"]
+    lines.append("Agent: Thank you, that's everything. We'll follow up by email. Goodbye.")
+    st["transcript"] = "\n".join(l for l in lines if l)
+    st["status"] = "done"
+    db.set_call_state(token, st)
+    return _xml(f"<Response>{_say('Thank you, that is everything. Goodbye.')}<Hangup/></Response>")

@@ -104,6 +104,14 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Multi-turn call conversation state (questions, answers, progress),
+            -- keyed by call token. Stored as a JSON blob.
+            CREATE TABLE IF NOT EXISTS call_state (
+                token      TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Work queue the cron job polls: one job per request.
             CREATE TABLE IF NOT EXISTS jobs (
                 request_id    TEXT PRIMARY KEY,
@@ -270,6 +278,25 @@ def get_call_reply(token: str) -> str | None:
             "SELECT text FROM call_replies WHERE token = ?", (token,)
         ).fetchone()
     return row["text"] if row else None
+
+
+def set_call_state(token: str, data: dict) -> None:
+    """Stores/updates the multi-turn conversation state for a call token."""
+    init_db()
+    with closing(connect()) as conn, conn:
+        conn.execute(
+            "INSERT INTO call_state (token, data, updated_at) VALUES (?, ?, datetime('now'))"
+            " ON CONFLICT(token) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+            (token, json.dumps(data)),
+        )
+
+
+def get_call_state(token: str) -> dict | None:
+    """Returns the conversation state for a call token, or None."""
+    init_db()
+    with closing(connect()) as conn:
+        row = conn.execute("SELECT data FROM call_state WHERE token = ?", (token,)).fetchone()
+    return json.loads(row["data"]) if row else None
 
 
 def get_web_vendors_for_location(location: str) -> list[dict]:

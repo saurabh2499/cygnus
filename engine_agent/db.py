@@ -9,6 +9,7 @@ Both backends expose the same function interface, so the rest of the app imports
 is active. The Firestore backend maps onto the 5 collections in `firestore_db`.
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -16,6 +17,11 @@ from dotenv import load_dotenv
 
 # Load the project-root .env once, for every component, regardless of backend.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# Silence google-genai's noisy "Direct use of AFC..." WARNING (we don't use AFC
+# in our direct generate_content calls). Keeps ERROR-level logs intact.
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
 
 _BACKEND = os.environ.get("DB_BACKEND", "sqlite").strip().lower()
 
@@ -28,6 +34,7 @@ if _BACKEND == "firestore":
         create_user,
         fail_or_retry_job,
         get_call_reply,
+        get_call_state,
         get_user,
         get_calls,
         get_request_result,
@@ -39,6 +46,7 @@ if _BACKEND == "firestore":
         record_call,
         register_request,
         set_call_reply,
+        set_call_state,
         set_final_summary,
         set_vendor_approval,
         set_vendor_summary,
@@ -55,6 +63,7 @@ else:
         create_user,
         fail_or_retry_job,
         get_call_reply,
+        get_call_state,
         get_calls,
         get_request_result,
         get_requirements,
@@ -66,6 +75,7 @@ else:
         record_call,
         register_request,
         set_call_reply,
+        set_call_state,
         set_final_summary,
         set_vendor_approval,
         set_vendor_summary,

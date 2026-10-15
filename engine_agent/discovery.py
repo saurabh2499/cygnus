@@ -64,13 +64,17 @@ def _tavily(query: str, max_results: int = 6) -> list[dict]:
 
 
 def _extract(location: str, requirements: dict, blob: str, limit: int) -> list[dict]:
-    """Uses Claude to turn raw search text into ranked vendor candidates."""
-    from anthropic import Anthropic
-
+    """Turns raw search text into ranked vendor candidates (Gemini or Claude)."""
+    radius = requirements.get("radius_km")
+    scope = (f"within about {radius} km of \"{location}\"" if radius
+             else f"near \"{location}\"")
+    radius_hint = (f"Prefer venues within {radius} km of {location}; skip clearly distant ones.\n"
+                   if radius else "")
     prompt = (
-        f"From the web search results below about dining near \"{location}\", "
+        f"From the web search results below about dining {scope}, "
         f"extract real, named restaurants or cafes that could host this event:\n"
         f"{json.dumps(requirements)}\n\n"
+        f"{radius_hint}"
         f"Return STRICT JSON: a list of up to {limit} venues, best-fit and most "
         f"popular/trending first. Each item:\n"
         '{"name": str, "area": str (neighborhood/city), '
@@ -82,19 +86,38 @@ def _extract(location: str, requirements: dict, blob: str, limit: int) -> list[d
         "venues. Output JSON only, no prose.\n\n"
         f"SEARCH RESULTS:\n{blob[:12000]}"
     )
-    client = Anthropic()
-    msg = client.messages.create(
-        model=_EXTRACT_MODEL, max_tokens=2000,
-        thinking={"type": "disabled"},   # deterministic parse; free tokens for JSON
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+    import agent_models
+
+    if agent_models.provider() == "gemini":
+        # google-genai reads env: Vertex (GOOGLE_GENAI_USE_VERTEXAI + project/location)
+        # or an AI Studio key (GOOGLE_API_KEY). No key passed here.
+        from google import genai
+        client = genai.Client()
+        resp = client.models.generate_content(
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"), contents=prompt,
+            config={"response_mime_type": "application/json"})  # force strict JSON
+        text = resp.text or ""
+    else:
+        from anthropic import Anthropic
+        client = Anthropic()
+        msg = client.messages.create(
+            model=_EXTRACT_MODEL, max_tokens=2000,
+            thinking={"type": "disabled"},   # deterministic parse; free tokens for JSON
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
-    try:
-        items = json.loads(text)
-    except json.JSONDecodeError:
+
+    def _safe_json(s):
+        try:
+            return json.loads(s)
+        except Exception:
+            return None
+
+    items = _safe_json(text)
+    if items is None:  # salvage the first JSON array if the model added prose
         m = re.search(r"\[.*\]", text, re.DOTALL)
-        items = json.loads(m.group(0)) if m else []
+        items = _safe_json(m.group(0)) if m else None
     return items if isinstance(items, list) else []
 
 
@@ -110,9 +133,12 @@ def discover(location: str, requirements: dict, limit: int = 5) -> dict:
 
     cuisine_terms = " ".join(str(x) for x in (requirements.get("must_haves") or [])
                              if str(x) not in ("catering", "av", "private_room"))
+    # Optional nearby radius (km): narrows the search to "within N km of <location>".
+    radius = requirements.get("radius_km")
+    near = f"within {radius} km of {location}" if radius else f"near {location}"
     queries = [
-        f"best restaurants and cafes near {location} for a private event",
-        f"most popular trending restaurants cafes {location} {cuisine_terms}".strip(),
+        f"best restaurants and cafes {near} for a private event",
+        f"most popular trending restaurants cafes {near} {cuisine_terms}".strip(),
     ]
     seen, blob_parts = set(), []
     for q in queries:

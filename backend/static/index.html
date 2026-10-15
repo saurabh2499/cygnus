@@ -272,6 +272,8 @@
       <div><label for="f_guests">Guest count</label><input id="f_guests" type="number" min="1" placeholder="60" /></div>
       <div><label for="f_date">Date</label><input id="f_date" type="date" /></div>
       <div><label for="f_location">Location</label><input id="f_location" placeholder="e.g. downtown Chicago" /></div>
+      <div><label for="f_radius">Search radius <span class="hint">(km, optional)</span></label>
+           <input id="f_radius" type="number" min="1" step="1" placeholder="e.g. 10" /></div>
       <div><label for="f_budget">Budget</label><input id="f_budget" placeholder="e.g. $8000 USD" /></div>
       <div><label for="f_must">Must-haves <span class="hint">(comma separated)</span></label>
            <input id="f_must" placeholder="catering, av, private_room" /></div>
@@ -412,7 +414,7 @@ async function loadDetail(){
     <div class="dh"><span class="et">${esc(req.event_type||"(untitled)")}</span>${badge(status)}</div>
     <div class="idline" style="margin-top:6px">${esc(d.request_id)}</div>
     <div class="chips">
-      ${chip("Guests", req.guest_count)}${chip("Date", req.date)}${chip("Location", req.location)}${chip("Budget", req.budget)}
+      ${chip("Guests", req.guest_count)}${chip("Date", req.date)}${chip("Location", req.location)}${chip("Radius", req.radius_km ? req.radius_km+" km" : "")}${chip("Budget", req.budget)}
       ${chip("Must-haves", asList(req.must_haves))}${chip("Nice-to-haves", asList(req.nice_to_haves))}
     </div>`;
 
@@ -480,6 +482,7 @@ $("#submitBtn").onclick = async () => {
     guest_count: $("#f_guests").value ? Number($("#f_guests").value) : undefined,
     date: $("#f_date").value || undefined,
     location: $("#f_location").value.trim() || undefined,
+    radius_km: $("#f_radius").value ? Number($("#f_radius").value) : undefined,
     budget: $("#f_budget").value.trim() || undefined,
     must_haves: must,
     nice_to_haves: splitList($("#f_nice").value),
@@ -492,7 +495,7 @@ $("#submitBtn").onclick = async () => {
     if (res.ok){
       toast("Request queued — the cron job will process it shortly");
       $("#modalBg").classList.remove("open");
-      ["f_event","f_guests","f_date","f_location","f_budget","f_must","f_nice"].forEach(id=>$("#"+id).value="");
+      ["f_event","f_guests","f_date","f_location","f_radius","f_budget","f_must","f_nice"].forEach(id=>$("#"+id).value="");
       selected = request_id; lastListJSON=""; await loadList(); loadDetail();
     } else { toast("Register failed: "+res.status); }
   } catch { toast("Network error"); }

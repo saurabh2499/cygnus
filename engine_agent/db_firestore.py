@@ -350,6 +350,19 @@ def get_call_reply(token: str) -> str | None:
     return snap.to_dict().get("text") if snap.exists else None
 
 
+_CALL_STATE = "call_state"
+
+
+def set_call_state(token: str, data: dict) -> None:
+    _db().collection(_CALL_STATE).document(token).set(
+        {**data, "token": token, "updated_on": fs._server_ts()})
+
+
+def get_call_state(token: str) -> dict | None:
+    snap = _db().collection(_CALL_STATE).document(token).get()
+    return snap.to_dict() if snap.exists else None
+
+
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #

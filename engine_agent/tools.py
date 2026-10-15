@@ -225,15 +225,15 @@ async def call_vendors(request_id: str, vendor_ids: list[str]) -> dict:
 
     semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
 
-    async def _one(vendor: dict):
+    async def _one(vendor: dict, call_index: int):
         async with semaphore:
             try:
-                transcript = await run_call(vendor, requirements)
+                transcript = await run_call(vendor, requirements, call_index=call_index)
                 return vendor["id"], transcript, None
             except Exception as exc:  # surface call failures per-vendor
                 return vendor["id"], None, str(exc)
 
-    results = await asyncio.gather(*[_one(v) for v in to_call])
+    results = await asyncio.gather(*[_one(v, i) for i, v in enumerate(to_call)])
 
     # Persist sequentially (single writer) after the parallel calls complete.
     transcripts = []

@@ -78,43 +78,62 @@ def _call_prompt(vendor: dict, requirements: dict) -> str:
     )
 
 
-def _spoken_script(vendor: dict, requirements: dict) -> str:
-    """A short TTS inquiry read aloud to the vendor on a real call."""
+def _greeting(vendor: dict, requirements: dict) -> str:
+    """Short opening line before the questions."""
     req = requirements
-    must = ", ".join(req.get("must_haves") or []) or "catering"
     return (
-        f"Hello, this is an event planning assistant calling on behalf of a client. "
-        f"We're organising a {req.get('event_type', 'event')} for about "
-        f"{req.get('guest_count', 'some')} guests in {req.get('location', 'your area')} "
-        f"on {req.get('date', 'a date to be confirmed')}, with a budget of "
-        f"{req.get('budget', 'a flexible budget')}. We're considering {vendor.get('name', 'your venue')}. "
-        f"We need {must}. Could you tell us about your availability, whether you can "
-        f"meet these needs, and rough pricing?"
+        f"Hello, this is an event planning assistant calling "
+        f"{('about ' + vendor['name'] + '. ') if vendor.get('name') else ''}"
+        f"on behalf of a client planning a {req.get('event_type', 'event')} "
+        f"for about {req.get('guest_count', 'several')} guests"
+        f"{(' on ' + str(req.get('date'))) if req.get('date') else ''}. "
+        f"I have a few quick questions — please answer each after the tone."
     )
 
 
-async def run_call(vendor: dict, requirements: dict) -> str:
-    """Runs one vendor call to completion and returns the transcript text.
+def _questions(requirements: dict) -> list[str]:
+    """One question per requirement — asked and answered one at a time."""
+    req = requirements
+    qs = ["Are you available for this event, and can you host this group size?"]
+    for m in (req.get("must_haves") or []):
+        qs.append(f"Can you provide {str(m).replace('_', ' ')}?")
+    if req.get("budget"):
+        qs.append(f"Our budget is {req['budget']}. Can you work within that?")
+    nice = req.get("nice_to_haves") or []
+    if nice:
+        pretty = ", ".join(str(n).replace("_", " ") for n in nice)
+        qs.append(f"Do you also offer {pretty}?")
+    qs.append("Roughly what would this cost, and whom should we follow up with?")
+    qs.append("Lastly, is there anything else you would like to add or any other "
+              "details you would like to share about your venue?")
+    return qs
 
-    If Twilio is configured, this places a REAL phone call (speaks the inquiry,
-    records and transcribes the reply). Otherwise it falls back to a simulated
-    transcript. Each simulated call gets its own in-memory runner and session, so
-    calls are fully independent and safe to run concurrently.
+
+async def run_call(vendor: dict, requirements: dict, call_index: int = 0) -> str:
+    """Runs one vendor call and returns the transcript.
+
+    If Twilio is configured, this places a REAL multi-turn call: it asks each
+    requirement one at a time, waiting for the vendor's spoken answer before the
+    next. Otherwise it falls back to a simulated transcript. Each simulated call
+    gets its own in-memory runner/session, so calls run independently.
+
+    ``call_index`` is this call's position in the parallel batch; it selects the
+    test override number when CALL_OVERRIDE_NUMBER is a comma-separated list.
     """
     from . import telephony
 
     if telephony.is_configured():
-        to = telephony.override_number() or vendor.get("phone")
+        to = telephony.override_number_for(call_index) or vendor.get("phone")
         if to:
-            script = _spoken_script(vendor, requirements)
-            res = await telephony.place_call(to, script)
+            greeting = _greeting(vendor, requirements)
+            questions = _questions(requirements)
+            res = await telephony.place_call(to, greeting, questions)
             if res.get("status") == "error":
                 return f"[Real call to {to} could not be placed: {res.get('error')}]"
-            reply = res.get("reply_text") or "(no spoken reply captured)"
             return (
-                f"[Real phone call to {to} via Twilio — status: {res.get('status')}]\n"
-                f"Agent (spoken): {script}\n"
-                f"Vendor (spoken reply): {reply}"
+                f"[Real phone call to {to} via Twilio — status: {res.get('status')}, "
+                f"{res.get('answered', 0)}/{len(questions)} questions answered]\n"
+                f"{res.get('transcript', '')}"
             )
         # No number to dial -> fall through to simulation.
 
