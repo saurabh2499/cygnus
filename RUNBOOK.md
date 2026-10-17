@@ -3,7 +3,7 @@
 Step-by-step guide to run the system and confirm every component works. For the
 architecture, see [README.md](README.md).
 
-The system has three runnable parts that share one SQLite database:
+The system has three runnable parts that share one Firestore database:
 
 | Part | Command | Needs API key? |
 | ---- | ------- | -------------- |
@@ -154,7 +154,7 @@ same request also appears via `GET /requests/<id>/summary`.
 | `GET /summary` returns 404 | Unknown `request_id` — check the ID. |
 | `POST /status` returns 404 | That vendor wasn't called for this request — use a `vendor_id` from the ranking. |
 | Port 8000 already in use | Another process is bound; stop it or run uvicorn with `--port 8001`. |
-| Want a clean slate | Delete the database file (default `cygnus/requirements.db`, or `$VENDOR_DB_PATH`). It is recreated and reseeded on next use. |
+| Want a clean slate | Clear the Firestore collections (or restart the emulator, which starts empty). |
 
 ---
 

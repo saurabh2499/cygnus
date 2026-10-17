@@ -90,6 +90,7 @@ def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> d
     if not location:
         return {"status": "error", "message": "Request has no location to search near."}
     norm = location.strip().lower()
+    vtype = requirements.get("vendor_type") or "restaurant"
 
     def _payload(vendors, source):
         return {
@@ -104,7 +105,7 @@ def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> d
         }
 
     # Known location -> reuse cached venues from the DB, no web search.
-    cached = db.get_web_vendors_for_location(norm)
+    cached = db.get_web_vendors_for_location(norm, vtype)
     if cached:
         return _payload(cached[:limit], source="cache")
 
@@ -142,10 +143,15 @@ def match_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> dict
     must = set(_as_list(requirements.get("must_haves")))
     nice = set(_as_list(requirements.get("nice_to_haves")))
     guests = requirements.get("guest_count") or 0
+    if requirements.get("vendor_type") == "hotel":
+        guests = 0  # hotels have rooms, not seating capacity
     location = str(requirements.get("location", "")).lower()
 
     scored = []
+    vtype = requirements.get("vendor_type") or "restaurant"
     for v in db.list_vendors():
+        if (v.get("vendor_type") or "restaurant") != vtype:
+            continue
         feats = set(v["features"])
         # Hard filter: must be able to seat the party (when a count is known).
         if guests and v["capacity"] and v["capacity"] < guests:

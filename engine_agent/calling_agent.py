@@ -28,8 +28,11 @@ _MODEL, _CONFIG = build_model("low")
 APP_NAME = "vendor_calling_agent"
 
 INSTRUCTION = """
-You are a calling agent placing a phone call to a vendor on behalf of a client
-who is planning an event. You are given the vendor's profile and the client's
+You are a calling agent placing a phone call to a vendor (a restaurant/venue, or a
+hotel when the requirements' vendor_type is "hotel") on behalf of a client.
+For a hotel, introduce the stay (check-in and check-out dates, number of rooms and
+guests, location), ask about room availability, the nightly rate versus the budget,
+amenities (breakfast, wifi, parking...), and the cancellation policy. You are given the vendor's profile and the client's
 requirements, and you must hold the call and return ONLY the transcript.
 
 Conduct a natural, concise phone conversation that:
@@ -38,6 +41,11 @@ Conduct a natural, concise phone conversation that:
 - asks about pricing relative to the client's budget,
 - probes the nice-to-haves and any special needs,
 - confirms next steps.
+
+Sound like a real person, not a script: use short sentences, natural fillers
+("okay, great", "got it"), and react to what the vendor just said. If the vendor
+asks you to repeat, rephrase, or hold on, do that politely (repeat the question
+in simpler words, or wait) and only move on once they have actually answered.
 
 Play BOTH sides of the call realistically: the vendor answers from its profile
 (availability, what it offers, rough pricing for its price tier) and may not be
@@ -81,9 +89,20 @@ def _call_prompt(vendor: dict, requirements: dict) -> str:
     )
 
 
+def _hotel_when(req: dict) -> str:
+    if req.get("date") and req.get("check_out"):
+        return f" from {req['date']} to {req['check_out']}"
+    return f" on {req['date']}" if req.get("date") else ""
+
+
 def _greeting(vendor: dict, requirements: dict) -> str:
     """A short, warm opening line."""
     req = requirements
+    if req.get("vendor_type") == "hotel":
+        rooms, g = req.get("rooms"), req.get("guest_count")
+        return (f"Hi! I'm helping a client book a stay{_hotel_when(req)}"
+                f"{f' for {g} guests' if g else ''}{f', needing {rooms} rooms' if rooms else ''}. "
+                f"Do you have a minute for a couple of quick questions?")
     g = req.get("guest_count")
     when = f" on {req.get('date')}" if req.get("date") else ""
     return (
@@ -99,6 +118,8 @@ def _questions(requirements: dict) -> list[str]:
     then we negotiate toward the budget.
     """
     req = requirements
+    if req.get("vendor_type") == "hotel":
+        return _hotel_questions(req)
     g = req.get("guest_count")
     when = f" on {req.get('date')}" if req.get("date") else ""
     qs = [f"First, would you be available{when} for a group of about {g or 'this size'}?"]
@@ -124,6 +145,29 @@ def _questions(requirements: dict) -> list[str]:
 
     qs.append("And who should we follow up with to confirm a booking?")
     qs.append("Anything else you'd like to share about your place before we wrap up?")
+    return qs
+
+
+def _hotel_questions(req: dict) -> list[str]:
+    """Hotel call script: availability, nightly rate, budget, amenities, policy."""
+    rooms, g = req.get("rooms"), req.get("guest_count")
+    need = f"{rooms} rooms" if rooms else "a room"
+    qs = [f"First, do you have {need} available{_hotel_when(req)}"
+          f"{f' for {g} guests' if g else ''}?"]
+    must = req.get("must_haves") or []
+    if must:
+        pretty = ", ".join(str(m).replace("_", " ") for m in must)
+        qs.append(f"Great. We need {pretty} — does that come with the rooms?")
+    qs.append("What would the nightly rate be, and does that include taxes?")
+    if req.get("budget"):
+        qs.append(f"I see. We're trying to stay around {req['budget']} in total — "
+                  f"is there any flexibility on the rate?")
+    nice = req.get("nice_to_haves") or []
+    if nice:
+        pretty = ", ".join(str(n).replace("_", " ") for n in nice)
+        qs.append(f"Would you also be able to offer {pretty}?")
+    qs.append("What is your cancellation policy?")
+    qs.append("And who should we follow up with to confirm the booking?")
     return qs
 
 

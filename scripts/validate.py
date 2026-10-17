@@ -19,14 +19,14 @@ Exit code 0 = everything passed, 1 = at least one check failed.
 
 import os
 import sys
-import tempfile
 
 # Make the project root importable no matter where this script is run from.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Point every component at a throwaway DB BEFORE importing anything that reads it.
-_TMP_DB = os.path.join(tempfile.mkdtemp(prefix="vm_validate_"), "validate.db")
-os.environ["VENDOR_DB_PATH"] = _TMP_DB
+# Use an in-memory Firestore BEFORE importing anything that reads the DB.
+from mockfirestore import MockFirestore  # noqa: E402  in-memory Firestore, no GCP needed
+from engine_agent import firestore_db as _fs  # noqa: E402
+_fs.set_client(MockFirestore())
 
 import asyncio  # noqa: E402
 

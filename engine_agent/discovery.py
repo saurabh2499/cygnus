@@ -29,6 +29,17 @@ FEATURE_VOCAB = [
     "indian", "mexican", "chinese", "mediterranean", "cafe", "fine_dining",
 ]
 
+HOTEL_FEATURE_VOCAB = [
+    "breakfast", "wifi", "pool", "gym", "spa", "parking", "airport_shuttle",
+    "pet_friendly", "free_cancellation", "conference_room", "restaurant", "bar",
+    "family_rooms", "accessible", "kitchenette", "city_view", "beachfront",
+]
+
+
+def vocab_for(vendor_type: str) -> list[str]:
+    return HOTEL_FEATURE_VOCAB if vendor_type == "hotel" else FEATURE_VOCAB
+
+
 _TAVILY_URL = "https://api.tavily.com/search"
 _EXTRACT_MODEL = "claude-haiku-5-5"   # fast/cheap for structured extraction
 
@@ -40,6 +51,10 @@ def is_available() -> bool:
 def _slug(name: str, area: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "_", f"{name}_{area}".lower()).strip("_")
     return "web_" + (base or "venue")[:60]
+
+
+def _is_hotel(requirements: dict) -> bool:
+    return requirements.get("vendor_type") == "hotel"
 
 
 def _tavily(query: str, max_results: int = 6) -> list[dict]:
@@ -70,23 +85,34 @@ def _extract(location: str, requirements: dict, blob: str, limit: int) -> list[d
              else f"near \"{location}\"")
     radius_hint = (f"Prefer venues within {radius} km of {location}; skip clearly distant ones.\n"
                    if radius else "")
+    hotel = _is_hotel(requirements)
+    vocab = vocab_for("hotel" if hotel else "restaurant")
+    if hotel:
+        what = ("accommodation " + scope, "real, named hotels that could host this stay")
+        extra = '"cuisine": str (hotel style, e.g. boutique/business/resort), '
+    else:
+        what = ("dining " + scope, "real, named restaurants or cafes that could host this event")
+        extra = '"cuisine": str, '
     prompt = (
-        f"From the web search results below about dining {scope}, "
-        f"extract real, named restaurants or cafes that could host this event:\n"
+        f"From the web search results below about {what[0]}, "
+        f"extract {what[1]}:\n"
         f"{json.dumps(requirements)}\n\n"
         f"{radius_hint}"
         f"Return STRICT JSON: a list of up to {limit} venues, best-fit and most "
         f"popular/trending first. Each item:\n"
         '{"name": str, "area": str (neighborhood/city), '
-        '"cuisine": str, "price_tier": int 1-4, '
-        f'"features": [subset of {FEATURE_VOCAB}], '
+        f'{extra}"price_tier": int 1-4, '
+        f'"features": [subset of {vocab}], '
         '"trending_reason": str (why it is popular/trending, from the results), '
         '"source_url": str}\n'
         "Only include venues that actually appear in the results. Do not invent "
         "venues. Output JSON only, no prose.\n\n"
         f"SEARCH RESULTS:\n{blob[:12000]}"
     )
-    import agent_models
+    try:  # top-level locally/Cloud Run; local copy when packaged for Agent Engine
+        import agent_models
+    except ModuleNotFoundError:
+        from . import model_factory as agent_models
 
     if agent_models.provider() == "gemini":
         # google-genai reads env: Vertex (GOOGLE_GENAI_USE_VERTEXAI + project/location)
@@ -131,15 +157,22 @@ def discover(location: str, requirements: dict, limit: int = 5) -> dict:
         return {"status": "unavailable",
                 "reason": "TAVILY_API_KEY not set; using the seeded catalog instead."}
 
+    hotel = _is_hotel(requirements)
     cuisine_terms = " ".join(str(x) for x in (requirements.get("must_haves") or [])
                              if str(x) not in ("catering", "av", "private_room"))
     # Optional nearby radius (km): narrows the search to "within N km of <location>".
     radius = requirements.get("radius_km")
     near = f"within {radius} km of {location}" if radius else f"near {location}"
-    queries = [
-        f"best restaurants and cafes {near} for a private event",
-        f"most popular trending restaurants cafes {near} {cuisine_terms}".strip(),
-    ]
+    if hotel:
+        queries = [
+            f"best hotels {near}",
+            f"top rated popular hotels {near} {cuisine_terms}".strip(),
+        ]
+    else:
+        queries = [
+            f"best restaurants and cafes {near} for a private event",
+            f"most popular trending restaurants cafes {near} {cuisine_terms}".strip(),
+        ]
     seen, blob_parts = set(), []
     for q in queries:
         for r in _tavily(q):
@@ -158,9 +191,12 @@ def discover(location: str, requirements: dict, limit: int = 5) -> dict:
         if not name:
             continue
         area = (c.get("area") or location).strip()
-        feats = [f for f in (c.get("features") or []) if f in FEATURE_VOCAB]
+        feats = [f for f in (c.get("features") or [])
+                 if f in vocab_for("hotel" if hotel else "restaurant")]
         vendors.append({
-            "id": _slug(name, area), "name": name, "area": area,
+            "id": ("web_hotel_" + _slug(name, area)[4:]) if hotel else _slug(name, area),
+            "vendor_type": "hotel" if hotel else "restaurant",
+            "name": name, "area": area,
             "capacity": None, "price_tier": c.get("price_tier"),
             "features": feats, "source": "web",
             "source_url": c.get("source_url"),

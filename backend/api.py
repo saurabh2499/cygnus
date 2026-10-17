@@ -13,6 +13,9 @@ Run: uvicorn backend.api:app --reload
 
 import logging
 import os
+import random
+import re
+from datetime import date, datetime
 from pathlib import Path
 
 # Emit our INFO logs (cron progress, engine steps, errors) to stdout so they show
@@ -62,6 +65,7 @@ class VendorResult(BaseModel):
     rank: int | None = None
     summary: str | None = None
     approved: bool = False
+    profile: dict = {}
 
 
 class SummaryResponse(BaseModel):
@@ -166,12 +170,37 @@ def me(request: Request) -> dict:
 # Endpoints
 # --------------------------------------------------------------------------- #
 
+def _parse_event_date(value) -> date | None:
+    """Best-effort parse of a requirements date; None for rough timeframes."""
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 @app.post("/requests", response_model=RegisterResponse, status_code=201)
 def register_request(payload: RegisterRequest, request: Request) -> RegisterResponse:
     """Registers a request and enqueues it for the cron job to process."""
     if not payload.requirements:
         raise HTTPException(status_code=400, detail="requirements must not be empty")
     requirements = dict(payload.requirements)
+    vtype = requirements.setdefault("vendor_type", "restaurant")
+    if vtype not in ("restaurant", "hotel"):
+        raise HTTPException(status_code=400, detail="vendor_type must be 'restaurant' or 'hotel'")
+    event_date = _parse_event_date(requirements.get("date"))
+    if event_date and event_date < date.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Check-in date cannot be in the past" if vtype == "hotel"
+            else "Event date cannot be in the past")
+    if vtype == "hotel":
+        out = _parse_event_date(requirements.get("check_out"))
+        if out and (out < date.today() or (event_date and out <= event_date)):
+            raise HTTPException(status_code=400,
+                                detail="Check-out must be after the check-in date")
     # Remember who to email on booking confirmation (the logged-in client).
     user = _current_user(request)
     if user and not requirements.get("client_email"):
@@ -194,6 +223,14 @@ def get_summary(request_id: str) -> SummaryResponse:
 async def update_status(request_id: str, payload: StatusUpdate) -> dict:
     """Approves (or unapproves) a vendor. On approval, calls the restaurant to
     confirm the booking and emails the client a confirmation."""
+    if payload.approved:
+        current = db.get_request_result(request_id) or {}
+        other = next((v for v in current.get("vendors", [])
+                      if v.get("approved") and v.get("vendor_id") != payload.vendor_id), None)
+        if other:
+            raise HTTPException(
+                status_code=409,
+                detail="Another vendor is already approved for this request. Unapprove it first.")
     ok = db.set_vendor_approval(request_id, payload.vendor_id, payload.approved)
     if not ok:
         raise HTTPException(
@@ -227,9 +264,17 @@ async def _confirm_booking(request_id: str, vendor_id: str) -> dict:
     event = req.get("event_type", "event")
     guests = req.get("guest_count", "the")
     when = req.get("date", "the planned date")
-    msg = (f"Hello from the event planning assistant. Great news — the client has "
-           f"approved {vendor_name} for their {event} on {when} for about {guests} guests. "
-           f"This call confirms the booking. We'll follow up by email with the details. Thank you!")
+    hotel = req.get("vendor_type") == "hotel"
+    if hotel:
+        stay = f"from {when} to {req['check_out']}" if req.get("check_out") else f"on {when}"
+        rooms = f"{req['rooms']} rooms" if req.get("rooms") else "a room"
+        msg = (f"Hello from the booking assistant. Great news — the client has approved "
+               f"{vendor_name} for {rooms} {stay}. This call confirms the booking. "
+               f"We'll follow up by email with the details. Thank you!")
+    else:
+        msg = (f"Hello from the event planning assistant. Great news — the client has "
+               f"approved {vendor_name} for their {event} on {when} for about {guests} guests. "
+               f"This call confirms the booking. We'll follow up by email with the details. Thank you!")
 
     out = {"call": "skipped", "email": "skipped"}
     # Confirmation call to the restaurant (override number in test mode).
@@ -243,9 +288,11 @@ async def _confirm_booking(request_id: str, vendor_id: str) -> dict:
     client_email = req.get("client_email")
     if client_email:
         subject = f"Booking confirmed: {vendor_name}"
-        body = (f"Hi,\n\nYour {event} on {when} for about {guests} guests is confirmed with "
+        what = (f"Your hotel stay from {when} to {req.get('check_out', '?')}" if hotel
+                else f"Your {event} on {when} for about {guests} guests")
+        body = (f"Hi,\n\n{what} is confirmed with "
                 f"{vendor_name}.\n\nSummary:\n{result.get('final_summary', '')}\n\n"
-                f"We've also called the restaurant to confirm.\n\n— Vendor Management")
+                f"We've also called the {'hotel' if hotel else 'restaurant'} to confirm.\n\n— Vendor Management")
         out["email"] = "sent" if notify.send_email(client_email, subject, body) else "failed"
     db.set_request_stage(request_id, "completed")
     return out
@@ -308,6 +355,38 @@ def _say(text: str) -> str:
     return f'<Say voice="{voice}" language="{lang}">{escape(text)}</Say>'
 
 
+_REPEAT_RE = re.compile(
+    r"\b(repeat|say (that|it|this) again|come again|pardon|didn'?t (quite )?(catch|hear|get)|"
+    r"can'?t (quite )?hear|what was (that|the question)|one more time|once more|"
+    r"could you (please )?(rephrase|clarify)|what do you mean|i don'?t (understand|follow)|"
+    r"say that slowly|too fast|you('re| are) breaking up)\b", re.I)
+_SHORT_HUH_RE = re.compile(r"^\W*(what|huh|sorry|excuse me|hello|hm+|come again)\W*$", re.I)
+_HOLD_RE = re.compile(
+    r"\b(hold on|hang on|one (moment|second|sec|minute)|just a (moment|second|sec|minute)|"
+    r"give me a (moment|second|minute)|let me (check|see|ask|look|find)|wait)\b", re.I)
+_WHO_RE = re.compile(r"\b(who (is|are) (this|you)|who'?s (this|calling)|what('s| is) this (about|regarding)|"
+                     r"why are you calling)\b", re.I)
+
+_REPEAT_LEADS = ["Sure, no problem — ", "Of course, sorry about that. ", "Yeah, let me say that again. ",
+                 "Sorry, I'll put it another way. ", "No worries. "]
+_HOLD_LINES = ["Sure, take your time.", "No rush, I'll wait.", "Of course, go ahead."]
+
+
+from xml.sax.saxutils import escape as escape_xml  # noqa: E402
+
+
+def _wants_repeat(speech: str) -> bool:
+    return bool(_REPEAT_RE.search(speech) or _SHORT_HUH_RE.match(speech))
+
+
+def _simplify(question: str) -> str:
+    """A shorter, plainer rewording for a second ask: drop filler up to the first dash/comma."""
+    for sep in (" — ", ", "):
+        if sep in question and len(question.split(sep, 1)[1]) > 15:
+            return question.split(sep, 1)[1].strip().capitalize()
+    return question
+
+
 def _ask(token: str, question: str) -> str:
     """A <Gather> that asks one question and waits for the vendor's answer.
 
@@ -358,14 +437,44 @@ async def twiml_turn(request: Request) -> Response:
     questions = st.get("questions", [])
     idx = st.get("idx", 0)
 
+    # Human-style handling of what the vendor said, before treating it as an answer.
+    # (They ask us to repeat / hold on / say who we are: respond and stay on the
+    # same question rather than moving forward.)
+    if speech and idx < len(questions):
+        q = questions[idx]
+        if _HOLD_RE.search(speech) and st.get("holds", 0) < 2 and len(speech.split()) <= 8:
+            st["holds"] = st.get("holds", 0) + 1
+            db.set_call_state(token, st)
+            wait = os.environ.get("TWILIO_GATHER_TIMEOUT", "10")
+            turn = escape_xml(f"{os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')}/twiml/turn?token={token}")
+            return _xml(
+                f"<Response>{_say(random.choice(_HOLD_LINES))}"
+                f'<Gather input="speech" speechTimeout="auto" timeout="{max(int(wait), 20)}" '
+                f'method="POST" action="{turn}"></Gather>'
+                f'<Redirect method="POST">{turn}</Redirect></Response>')
+        if _WHO_RE.search(speech) and st.get("intros", 0) < 1:
+            st["intros"] = 1
+            db.set_call_state(token, st)
+            return _xml(
+                f"<Response>{_say(st.get('greeting', ''))}{_ask(token, q)}</Response>")
+        if _wants_repeat(speech) and st.get("repeats", 0) < 3:
+            st["repeats"] = st.get("repeats", 0) + 1
+            db.set_call_state(token, st)
+            text = q if st["repeats"] == 1 else _simplify(q)
+            return _xml(
+                f"<Response>{_say(random.choice(_REPEAT_LEADS))}"
+                f"{_ask(token, text)}</Response>")
+
     # Silence on the current question: re-ask once before giving up on it, so a
     # pause doesn't skip the question or end the call prematurely.
     if not speech and idx < len(questions):
         if not st.get("retried"):
             st["retried"] = True
             db.set_call_state(token, st)
+            lead = random.choice(["Sorry, I didn't catch that. ", "Hello? Sorry, are you still there? ",
+                                  "Sorry, I think the line cut out for a second. "])
             return _xml(
-                f"<Response>{_say('Sorry, I did not catch that.')}"
+                f"<Response>{_say(lead)}"
                 f"{_ask(token, questions[idx])}</Response>")
 
     # Record the answer (or '(no response)' after a retry) and advance.
@@ -375,12 +484,15 @@ async def twiml_turn(request: Request) -> Response:
         idx += 1
         st["idx"] = idx
         st["retried"] = False
+        st["repeats"] = 0
+        st["holds"] = 0
 
     if idx < len(questions):
         db.set_call_state(token, st)
         # Brief, varied, human acknowledgement — never "next question".
-        acks = ["Got it.", "Okay.", "Sure.", "Thanks.", "Makes sense.", "Perfect."]
-        ack = (acks[idx % len(acks)] + " ") if speech else ""
+        acks = ["Got it.", "Okay, great.", "Sure, thanks.", "Alright.", "Makes sense.", "Perfect, thank you.",
+                "Okay, good to know.", "Mm-hm, thanks."]
+        ack = (random.choice(acks) + " ") if speech else ""
         return _xml(f"<Response>{_say(ack)}{_ask(token, questions[idx])}</Response>")
 
     # All requirements covered — finish and store the transcript.

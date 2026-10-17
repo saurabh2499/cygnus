@@ -16,12 +16,11 @@ Usage:  python scripts/test_cron.py
 import asyncio
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ["VENDOR_DB_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="vm_cron_"), "cron.db"
-)
+from mockfirestore import MockFirestore  # noqa: E402  in-memory Firestore, no GCP needed
+from engine_agent import firestore_db as _fs  # noqa: E402
+_fs.set_client(MockFirestore())
 
 import engine_agent.db as db          # noqa: E402
 import scheduler.cron as cron         # noqa: E402
@@ -101,8 +100,7 @@ async def main():
             break
         await cron.run_sweep(cfg)
     flaky = db.get_request_result(FLAKY)
-    with db.connect() as c:
-        attempts = c.execute("SELECT attempt_count FROM jobs WHERE request_id=?", (FLAKY,)).fetchone()[0]
+    attempts = _fs.client().collection(_fs.REQUESTS).document(FLAKY).get().to_dict()["attempt_count"]
     check("D. failing job retried up to the cap then failed",
           flaky["job_status"] == "failed" and attempts == 3 and calls[FLAKY] == 3,
           f"status={flaky['job_status']}, attempts={attempts}, engine_runs={calls[FLAKY]}")
