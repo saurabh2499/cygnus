@@ -57,7 +57,12 @@ def client():
     global _client
     if _client is None:
         from google.cloud import firestore
-        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        # Firestore needs the project **ID** (the number 404s). On Agent Engine,
+        # `adk deploy` strips GOOGLE_CLOUD_PROJECT and the runtime defaults to the
+        # project number, so fall back to FIRESTORE_PROJECT (not stripped).
+        # Prefer FIRESTORE_PROJECT: on Agent Engine the runtime sets
+        # GOOGLE_CLOUD_PROJECT to the project NUMBER, which Firestore rejects.
+        project = os.environ.get("FIRESTORE_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
         _client = firestore.Client(project=project) if project else firestore.Client()
     return _client
 

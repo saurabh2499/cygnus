@@ -147,6 +147,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "search_location" not in vcols:
         # The normalized location this venue was discovered for (cache key).
         conn.execute("ALTER TABLE vendors ADD COLUMN search_location TEXT")
+    # Short progress stage on jobs (queued/picked/running/calling/completed).
+    jcols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+    if "stage" not in jcols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN stage TEXT")
 
 
 def _seed_vendors(conn: sqlite3.Connection) -> None:
@@ -446,7 +450,7 @@ def claim_due_jobs(limit: int) -> list[dict]:
         claimed = [r["request_id"] for r in rows]
         for rid in claimed:
             conn.execute(
-                "UPDATE jobs SET status = 'in_progress',"
+                "UPDATE jobs SET status = 'in_progress', stage = 'picked',"
                 " attempt_count = attempt_count + 1, updated_at = datetime('now')"
                 " WHERE request_id = ?",
                 (rid,),
@@ -462,11 +466,18 @@ def complete_job(request_id: str) -> None:
     """Marks a job completed after a successful engine run."""
     with closing(connect()) as conn, conn:
         conn.execute(
-            "UPDATE jobs SET status = 'completed', last_error = NULL,"
+            "UPDATE jobs SET status = 'completed', stage = 'completed', last_error = NULL,"
             " next_retry_at = NULL, updated_at = datetime('now')"
             " WHERE request_id = ?",
             (request_id,),
         )
+
+
+def set_request_stage(request_id: str, stage: str) -> None:
+    """Sets a short progress stage (queued/picked/running/calling/completed)."""
+    init_db()
+    with closing(connect()) as conn, conn:
+        conn.execute("UPDATE jobs SET stage = ? WHERE request_id = ?", (stage, request_id))
 
 
 def fail_or_retry_job(request_id: str, error: str, backoff_seconds: int = 60) -> str:
@@ -527,6 +538,7 @@ def get_request_result(request_id: str) -> dict | None:
     return {
         "request_id": request_id,
         "requirements": requirements or {},
+        "stage": job["stage"] if job else None,
         "job_status": job["status"] if job else "not_queued",
         "result_status": summary["status"] if summary else "pending",
         "final_summary": summary["final_summary"] if summary else None,
@@ -559,7 +571,7 @@ def list_requests() -> list[dict]:
             return []
         rows = conn.execute(
             "SELECT r.requestid AS request_id, r.requirements AS requirements,"
-            "       j.status AS job_status, j.attempt_count, j.max_retries,"
+            "       j.status AS job_status, j.stage AS stage, j.attempt_count, j.max_retries,"
             "       j.created_at AS job_created, s.status AS result_status,"
             "       s.updated_at AS result_updated"
             "  FROM event_requirements r"
@@ -575,6 +587,7 @@ def list_requests() -> list[dict]:
             "event_type": reqs.get("event_type"),
             "guest_count": reqs.get("guest_count"),
             "location": reqs.get("location"),
+            "stage": row["stage"],
             "job_status": row["job_status"] or "not_queued",
             "result_status": row["result_status"] or "pending",
             "attempt_count": row["attempt_count"] or 0,

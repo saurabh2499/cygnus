@@ -118,6 +118,29 @@ def _place_sync(to: str, greeting: str, questions: list, wait: int) -> dict:
             "transcript": transcript, "answered": answered}
 
 
+def _place_announcement_sync(to: str, message: str) -> dict:
+    client = _client()
+    token = uuid.uuid4().hex
+    db.set_call_state(token, {"greeting": message, "questions": [], "answers": [],
+                              "idx": 0, "status": "announce", "transcript": None})
+    base = os.environ["PUBLIC_BASE_URL"].rstrip("/")
+    try:
+        call = client.calls.create(
+            to=to, from_=os.environ["TWILIO_FROM_NUMBER"],
+            url=f"{base}/twiml/call?token={token}")
+        return {"ok": True, "status": "queued", "sid": call.sid}
+    except Exception as exc:
+        return {"ok": False, "status": "error", "error": str(exc)}
+
+
+async def place_announcement(to: str, message: str) -> dict:
+    """Places a one-shot call that just speaks a message (no questions).
+
+    Used for the post-approval booking confirmation call. Fire-and-forget: it
+    creates the call and returns (Twilio handles the actual call)."""
+    return await asyncio.to_thread(_place_announcement_sync, to, message)
+
+
 async def place_call(to: str, greeting: str, questions: list, wait: int = 240) -> dict:
     """Places one real multi-turn call: asks each question, waits for the vendor's
     spoken answer, then moves to the next, and returns the transcript.

@@ -81,6 +81,7 @@ def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> d
         explaining why discovery was skipped so you can fall back to the catalog.
     """
     db.init_db()
+    db.set_request_stage(request_id, "running")
     requirements = db.get_requirements(request_id)
     if requirements is None:
         return {"status": "error",
@@ -200,6 +201,7 @@ async def call_vendors(request_id: str, vendor_ids: list[str]) -> dict:
         The transcript (or error) for each vendor that was called.
     """
     db.init_db()
+    db.set_request_stage(request_id, "calling")
     requirements = db.get_requirements(request_id)
     if requirements is None:
         return {"status": "error",

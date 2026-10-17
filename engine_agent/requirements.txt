@@ -1,0 +1,4 @@
+google-cloud-firestore==2.34.1
+google-genai==2.25.0
+twilio==9.11.2
+python-dotenv==1.2.3

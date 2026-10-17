@@ -89,14 +89,23 @@ def claim_due_jobs(limit: int) -> list[dict]:
     for d in candidates[:max(0, limit)]:
         rid = d["id"]
         attempt = (d.get("attempt_count") or 0) + 1
-        fs.update_request(rid, request_status="in_progress", attempt_count=attempt)
+        fs.update_request(rid, request_status="in_progress", attempt_count=attempt,
+                          stage="picked")
         d = fs.get_request(rid)
+        # Normalize to the same keys the cron's _run_job expects (SQLite jobs schema):
+        d["request_id"] = d.get("id")
+        d["status"] = d.get("request_status")
         claimed.append(d)
     return claimed
 
 
+def set_request_stage(request_id: str, stage: str) -> None:
+    """Sets a short progress stage (queued/picked/running/calling/completed)."""
+    fs.update_request(request_id, stage=stage)
+
+
 def complete_job(request_id: str) -> None:
-    fs.update_request(request_id, request_status="completed",
+    fs.update_request(request_id, request_status="completed", stage="completed",
                       last_error=None, next_retry_at=None)
 
 
@@ -259,6 +268,7 @@ def get_request_result(request_id: str) -> dict | None:
     return {
         "request_id": request_id,
         "requirements": requirements,
+        "stage": (req or {}).get("stage"),
         "job_status": (req or {}).get("request_status", "not_queued"),
         "result_status": (final or {}).get("result_status", "pending"),
         "final_summary": (final or {}).get("summary"),
@@ -304,6 +314,7 @@ def list_requests() -> list[dict]:
             "event_type": reqs.get("event_type"),
             "guest_count": reqs.get("guest_count"),
             "location": reqs.get("location"),
+            "stage": req.get("stage"),
             "job_status": req.get("request_status", "not_queued"),
             "result_status": (final or {}).get("result_status", "pending"),
             "attempt_count": req.get("attempt_count", 0),

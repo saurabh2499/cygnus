@@ -17,7 +17,10 @@ from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
-from agent_models import build_model
+try:
+    from agent_models import build_model
+except ModuleNotFoundError:
+    from .model_factory import build_model
 
 # A lighter effort than the engine: each call is a bounded, scripted conversation.
 _MODEL, _CONFIG = build_model("low")
@@ -79,33 +82,48 @@ def _call_prompt(vendor: dict, requirements: dict) -> str:
 
 
 def _greeting(vendor: dict, requirements: dict) -> str:
-    """Short opening line before the questions."""
+    """A short, warm opening line."""
     req = requirements
+    g = req.get("guest_count")
+    when = f" on {req.get('date')}" if req.get("date") else ""
     return (
-        f"Hello, this is an event planning assistant calling "
-        f"{('about ' + vendor['name'] + '. ') if vendor.get('name') else ''}"
-        f"on behalf of a client planning a {req.get('event_type', 'event')} "
-        f"for about {req.get('guest_count', 'several')} guests"
-        f"{(' on ' + str(req.get('date'))) if req.get('date') else ''}. "
-        f"I have a few quick questions — please answer each after the tone."
+        f"Hi! I'm helping plan a {req.get('event_type', 'get-together')} for about "
+        f"{g or 'a few'} guests{when}. Do you have a minute for a couple of quick questions?"
     )
 
 
 def _questions(requirements: dict) -> list[str]:
-    """One question per requirement — asked and answered one at a time."""
+    """A natural set of questions, asked one at a time.
+
+    Pricing is asked FIRST (based on the group size) before we reveal our budget,
+    then we negotiate toward the budget.
+    """
     req = requirements
-    qs = ["Are you available for this event, and can you host this group size?"]
-    for m in (req.get("must_haves") or []):
-        qs.append(f"Can you provide {str(m).replace('_', ' ')}?")
+    g = req.get("guest_count")
+    when = f" on {req.get('date')}" if req.get("date") else ""
+    qs = [f"First, would you be available{when} for a group of about {g or 'this size'}?"]
+
+    must = req.get("must_haves") or []
+    if must:
+        pretty = ", ".join(str(m).replace("_", " ") for m in must)
+        qs.append(f"Great. We're hoping for {pretty} — is that something you can do?")
+
+    # Ask the restaurant to quote first, based on guest count (don't reveal budget yet).
+    qs.append(f"For a group of around {g or 'that size'}, roughly what would it cost? "
+              f"Do you have a per-person rate or a package?")
+
+    # Then negotiate toward our budget.
     if req.get("budget"):
-        qs.append(f"Our budget is {req['budget']}. Can you work within that?")
+        qs.append(f"I see. We're trying to stay around {req['budget']} in total — "
+                  f"is there any flexibility to make that work?")
+
     nice = req.get("nice_to_haves") or []
     if nice:
         pretty = ", ".join(str(n).replace("_", " ") for n in nice)
-        qs.append(f"Do you also offer {pretty}?")
-    qs.append("Roughly what would this cost, and whom should we follow up with?")
-    qs.append("Lastly, is there anything else you would like to add or any other "
-              "details you would like to share about your venue?")
+        qs.append(f"Would you also be able to offer {pretty}?")
+
+    qs.append("And who should we follow up with to confirm a booking?")
+    qs.append("Anything else you'd like to share about your place before we wrap up?")
     return qs
 
 

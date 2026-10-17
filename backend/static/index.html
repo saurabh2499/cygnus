@@ -332,11 +332,7 @@
 
       <div id="corpFields" hidden>
         <div style="margin-bottom:12px"><label for="suCompany">Company / team</label><input id="suCompany" placeholder="Acme Corp"></div>
-        <div class="row2">
-          <div><label for="suBudget">Team budget</label><input id="suBudget" type="number" min="0" step="1" placeholder="50000"></div>
-          <div><label for="suCurrency">Currency</label><input id="suCurrency" value="USD" style="text-transform:uppercase"></div>
-        </div>
-        <div style="margin-top:12px"><label for="suExpiry">Budget expiry</label><input id="suExpiry" type="date"></div>
+        <div><label for="suExpiry">Access expiry</label><input id="suExpiry" type="date"></div>
       </div>
 
       <div class="err" id="signupErr" aria-live="polite"></div>
@@ -354,14 +350,22 @@ let lastListJSON = "";
 
 const CHECK = '<svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
 const STATUS = {
-  pending:   ["Pending", "b-pending"],
-  not_queued:["Not queued","b-pending"],
-  in_progress:["Processing","b-progress"],
-  processing:["Processing","b-progress"],
-  retry_scheduled:["Retry scheduled","b-retry"],
-  completed: ["Completed","b-done"],
-  failed:    ["Failed","b-fail"],
+  queued:    ["Queued", "b-pending"],
+  picked:    ["Picked", "b-progress"],
+  running:   ["Running", "b-progress"],
+  calling:   ["Calling", "b-progress"],
+  booking:   ["Booking", "b-progress"],
+  completed: ["Completed", "b-done"],
+  failed:    ["Failed", "b-fail"],
 };
+// Collapse the backend's job/result/stage fields into one short status.
+function shortStatus(r){
+  if (r.result_status === "completed") return "completed";
+  if (r.job_status === "failed") return "failed";
+  if (r.stage && STATUS[r.stage]) return r.stage;
+  if (r.job_status === "in_progress") return "picked";
+  return "queued";
+}
 function badge(status){
   const [label, cls] = STATUS[status] || [status, "b-pending"];
   return `<span class="badge ${cls}">${label}</span>`;
@@ -381,9 +385,8 @@ async function loadList(){
   const ul = $("#reqlist");
   if (!data.length){ ul.innerHTML = `<li class="empty">No requests yet. Click “New request”.</li>`; return; }
   ul.innerHTML = data.map(r => {
-    const status = r.result_status === "completed" ? "completed"
-                 : (r.job_status === "failed" ? "failed" : r.job_status);
-    const retry = (r.attempt_count>0 && status!=="completed") ? ` · try ${r.attempt_count}/${r.max_retries}` : "";
+    const status = shortStatus(r);
+    const retry = (r.attempt_count>1 && status!=="completed") ? ` · try ${r.attempt_count}/${r.max_retries}` : "";
     return `<li class="req ${selected===r.request_id?'active':''}" data-id="${esc(r.request_id)}" tabindex="0" role="button">
       <div class="row1"><span class="ev">${esc(r.event_type||"(untitled)")}</span>${badge(status)}</div>
       <div class="meta">${r.guest_count?esc(r.guest_count)+" guests · ":""}${esc(r.location||"")}${retry}</div>
@@ -407,8 +410,7 @@ async function loadDetail(){
   const req = d.requirements || {};
   const asList = v => Array.isArray(v) ? v.join(", ") : (v||"");
   const chip = (k,v) => v ? `<span class="chip"><b>${k}:</b> ${esc(v)}</span>` : "";
-  const status = d.result_status === "completed" ? "completed"
-               : (d.job_status === "failed" ? "failed" : d.job_status);
+  const status = shortStatus(d);
 
   let body = `<div class="pad">
     <div class="dh"><span class="et">${esc(req.event_type||"(untitled)")}</span>${badge(status)}</div>
@@ -420,12 +422,9 @@ async function loadDetail(){
 
   if (status === "failed"){
     body += `<div class="section-title">Result</div>
-      <div class="final" style="border-left-color:var(--s-fail-fg)">This request failed after its retries. Check the cron log.</div>`;
+      <div class="final" style="border-left-color:var(--s-fail-fg)">This request failed. Please try again.</div>`;
   } else if (status !== "completed"){
-    body += `<div class="processing"><span class="spin"></span>
-      ${status==="pending"||status==="not_queued" ? "Waiting for the cron job to pick this up…"
-        : status==="retry_scheduled" ? "Scheduled for retry…"
-        : "Engine is matching vendors and placing calls…"}</div>`;
+    body += `<div class="processing"><span class="spin"></span> ${(STATUS[status]||["Working"])[0]}…</div>`;
   } else {
     body += `<div class="section-title">Final summary</div><div class="final">${esc(d.final_summary||"")}</div>`;
     const ranking = d.ranking || [];
@@ -529,10 +528,9 @@ function renderBudgetBar(u){
     else if (days <= 14) { expCls = "soon"; expTxt = `${u.budget_expiry} (${days}d left)`; }
   }
   bar.innerHTML =
-    `<span class="lbl"><svg class="i" viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Team budget remaining</span>`+
-    `<span class="amt">${u.team_budget!=null ? fmtMoney(u.team_budget, u.budget_currency) : "—"}</span>`+
+    `<span class="lbl"><svg class="i" viewBox="0 0 24 24"><path d="M3 21h18M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"/></svg> ${esc(u.company || "Corporate team")}</span>`+
     `<span class="sep"></span>`+
-    `<span class="lbl"><svg class="i" viewBox="0 0 24 24"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg> Expires</span>`+
+    `<span class="lbl"><svg class="i" viewBox="0 0 24 24"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg> Access expires</span>`+
     `<span class="exp ${expCls}">${esc(expTxt)}</span>`;
   bar.hidden = false;
 }
@@ -611,11 +609,9 @@ $("#signupForm").onsubmit = async (e) => {
   };
   if (accountType === "corporate"){
     payload.company = $("#suCompany").value.trim() || undefined;
-    payload.team_budget = $("#suBudget").value ? Number($("#suBudget").value) : undefined;
-    payload.budget_currency = ($("#suCurrency").value.trim() || "USD").toUpperCase();
     payload.budget_expiry = $("#suExpiry").value || undefined;
-    if (!payload.company || payload.team_budget == null || !payload.budget_expiry){
-      $("#signupErr").textContent = "Company, team budget and expiry are required for corporate accounts."; return;
+    if (!payload.company || !payload.budget_expiry){
+      $("#signupErr").textContent = "Company and access expiry are required for corporate accounts."; return;
     }
   }
   if (!payload.email || !payload.password){ $("#signupErr").textContent = "Email and password are required."; return; }

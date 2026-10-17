@@ -11,7 +11,10 @@ message such as "Process request <request_id>".
 
 from google.adk.agents import Agent
 
-from agent_models import build_model
+try:  # top-level module locally/Cloud Run; local copy when packaged for Agent Engine
+    from agent_models import build_model
+except ModuleNotFoundError:
+    from .model_factory import build_model
 
 from .tools import (
     call_vendors,

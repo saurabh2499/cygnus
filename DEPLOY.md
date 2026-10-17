@@ -1,145 +1,99 @@
-# Deploying to Google Cloud (AI Builder Cup)
+# Deploying to Google Cloud
 
-Deploys the backend (API + dashboard + Twilio webhooks) to **Cloud Run**, runs the
-cron via **Cloud Scheduler**, and runs the agents on **Gemini**.
+Deploys the whole system to **Cloud Run** (backend API + dashboard + Twilio
+webhooks), with **Gemini on Vertex AI**, **Firestore** for storage, and **Cloud
+Scheduler** driving the cron. Cloud Run gives a public HTTPS URL, so **Twilio
+reaches the call webhooks directly — no ngrok in production.**
 
-Deploying to Cloud Run gives a **public HTTPS URL**, which also removes the ngrok
-requirement — Twilio calls that URL directly.
+The app is already built for this: `MODEL_PROVIDER=gemini` + Vertex, and
+`DB_BACKEND=firestore`. The code needs no changes — this is all config.
 
-## Doing this for ~$0 (no event credits needed)
-
-The event is **not** giving Cloud credits, but a hackathon-sized deployment fits in
-Google's free options. Two ways to run the models — pick one:
-
-| | **Option A: $300 free trial + Vertex AI** | **Option B: pure free tier + AI Studio** |
-|---|---|---|
-| Model | Gemini Flash on **Vertex AI** | Gemini Flash via **AI Studio free key** |
-| Cost | $0 (drawn from the 90-day $300 trial) | $0 (free tier) |
-| Limits | No tight rate limits | ~10 req/min, ~1,500/day; data may be used for training |
-| Auth | Service account (no key) | `GOOGLE_API_KEY` |
-| Best for | Smooth demo/judging | Zero-signup-friction, but throttled |
-
-Both deploy the **app** to Cloud Run (which satisfies "deployed on Google Cloud").
-**Option A is recommended** — the $300 trial is a standard new-account offer (not event
-credits), covers Vertex + Cloud Run easily, and never auto-charges unless you manually
-upgrade. Set a budget alert (step 8) and you're safe.
-
-**Keeping Cloud Run free:** deploy with `--min-instances 0` (scale to zero — you only
-pay while handling a request, and the free tier covers 2M requests/mo). The cron runs
-synchronously on each Cloud Scheduler hit, so no always-on instance is needed.
-
-**Free-tier model mitigations (Option B):** the engine makes several model calls per
-request (discovery + ranking) plus parallel vendor calls, which can burst past 10/min.
-To stay under the limit, lower `DEFAULT_VENDOR_LIMIT` to 2 in `engine_agent/db.py` and
-set `GEMINI_MODEL=gemini-flash-lite-latest`. Option A avoids this entirely.
-
-> The app is coded so models switch with one env var (`MODEL_PROVIDER=gemini`), and
-> the backend binds to Cloud Run's `$PORT` (see the Dockerfile). The one code change
-> still needed for a durable deployment is the database — see step 6.
+> Replace `gen-lang-client-0800138646` below with your own project if different.
+> Pick one region and use it everywhere (examples use `us-central1`).
 
 ---
 
-## 0. Prerequisites
+## 0. One-time auth & APIs
+
+The deploy CLI needs an active account (separate from the ADC you set up for local Gemini):
 
 ```bash
-# Install the gcloud CLI, then:
 gcloud auth login
-gcloud projects create vendor-mgmt-aibc      # or use an existing project
-gcloud config set project vendor-mgmt-aibc
-# Link billing (apply your AI Builder Cup credits in the Cloud Console → Billing)
+gcloud config set project gen-lang-client-0800138646
+
+gcloud services enable \
+  run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
+  aiplatform.googleapis.com firestore.googleapis.com \
+  cloudscheduler.googleapis.com secretmanager.googleapis.com
 ```
 
-Enable the APIs used:
+## 1. Create the Firestore database (once)
+
+Firestore is **required** on Cloud Run — SQLite can't persist across scale-to-zero
+instances, and the multi-turn calls rely on shared `call_state` that any instance
+can read (Firestore provides that).
 
 ```bash
-gcloud services enable \
-  run.googleapis.com \
-  cloudbuild.googleapis.com \
-  aiplatform.googleapis.com \
-  cloudscheduler.googleapis.com \
-  secretmanager.googleapis.com \
-  firestore.googleapis.com
+gcloud firestore databases create --location=us-central1   # Native mode
 ```
 
----
+## 2. Store secrets in Secret Manager
 
-## 1. Models → Gemini on Vertex AI
-
-On Cloud Run, Vertex AI authenticates via the service account — **no API key needed**.
-These env vars (set in step 4) do it:
-
-```
-MODEL_PROVIDER=gemini
-GEMINI_MODEL=gemini-3.6-flash          # or another current Gemini Flash model
-GOOGLE_GENAI_USE_VERTEXAI=TRUE
-GOOGLE_CLOUD_PROJECT=vendor-mgmt-aibc
-GOOGLE_CLOUD_LOCATION=us-central1
+```bash
+printf '%s' 'YOUR_TWILIO_ACCOUNT_SID' | gcloud secrets create TWILIO_ACCOUNT_SID --data-file=-
+printf '%s' 'YOUR_TWILIO_AUTH_TOKEN'  | gcloud secrets create TWILIO_AUTH_TOKEN  --data-file=-
+printf '%s' 'YOUR_TAVILY_API_KEY'     | gcloud secrets create TAVILY_API_KEY     --data-file=-
+# A stable random secret so login sessions survive restarts:
+printf '%s' "$(python -c 'import secrets;print(secrets.token_hex(32))')" \
+  | gcloud secrets create SESSION_SECRET --data-file=-
 ```
 
-Grant the Cloud Run service account Vertex access (after first deploy, or use the
-default compute SA):
+## 3. Deploy the backend to Cloud Run (first deploy)
+
+From the project root (where the `Dockerfile` is):
 
 ```bash
 PROJECT=$(gcloud config get-value project)
-PROJNUM=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
-gcloud projects add-iam-policy-binding $PROJECT \
-  --member="serviceAccount:${PROJNUM}-compute@developer.gserviceaccount.com" \
-  --role="roles/aiplatform.user"
-```
 
-Local testing with Gemini instead of Vertex: set `MODEL_PROVIDER=gemini` and
-`GOOGLE_API_KEY=<AI Studio key>` in `.env` (free tier is Flash-only).
-
----
-
-## 2. Secrets (Twilio, Tavily)
-
-Store secrets in Secret Manager (preferred) or pass as env vars in step 4:
-
-```bash
-printf '%s' 'YOUR_TWILIO_SID'   | gcloud secrets create TWILIO_ACCOUNT_SID --data-file=-
-printf '%s' 'YOUR_TWILIO_TOKEN' | gcloud secrets create TWILIO_AUTH_TOKEN  --data-file=-
-printf '%s' 'YOUR_TAVILY_KEY'   | gcloud secrets create TAVILY_API_KEY     --data-file=-
-```
-
----
-
-## 3. (first) Deploy the backend
-
-From the project root (where the Dockerfile is):
-
-```bash
 gcloud run deploy vendor-backend \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
   --min-instances 0 \
   --cpu 1 --memory 512Mi \
-  --set-env-vars DB_BACKEND=firestore,MODEL_PROVIDER=gemini,GEMINI_MODEL=gemini-3.6-flash,GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project),GOOGLE_CLOUD_LOCATION=us-central1,TWILIO_FROM_NUMBER=+1XXXXXXXXXX,TWILIO_VOICE=Polly.Raveena,TWILIO_LANGUAGE=en-IN,CALL_OVERRIDE_NUMBER=+91XXXXXXXXXX \
-  --set-secrets TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest
+  --timeout 900 \
+  --set-env-vars DB_BACKEND=firestore,MODEL_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=us-central1,TWILIO_FROM_NUMBER=+1XXXXXXXXXX,TWILIO_VOICE=Polly.Raveena,TWILIO_LANGUAGE=en-IN \
+  --set-secrets TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,SESSION_SECRET=SESSION_SECRET:latest
 ```
 
-Note the service URL it prints, e.g. `https://vendor-backend-xxxx.a.run.app`.
+Cloud Build builds the Dockerfile and deploys. Note the printed **Service URL**
+(e.g. `https://vendor-backend-xxxx.a.run.app`).
 
----
+## 4. Grant the runtime service account access to Gemini + Firestore
 
-## 4. Set the public URL and redeploy
+```bash
+PROJECT=$(gcloud config get-value project)
+PNUM=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
+SA="${PNUM}-compute@developer.gserviceaccount.com"
 
-The TwiML webhooks need to know their own public address:
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/aiplatform.user"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/datastore.user"
+# Needed to read the Secret Manager secrets wired in step 3:
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor"
+```
+
+## 5. Set PUBLIC_BASE_URL to the service's own URL and redeploy env
+
+The Twilio call webhooks (`/twiml/call`, `/twiml/turn`) must point at the live URL:
 
 ```bash
 URL=$(gcloud run services describe vendor-backend --region us-central1 --format='value(status.url)')
-gcloud run services update vendor-backend --region us-central1 \
-  --update-env-vars PUBLIC_BASE_URL=$URL
+gcloud run services update vendor-backend --region us-central1 --update-env-vars PUBLIC_BASE_URL=$URL
 ```
 
-Then point **Twilio** at it (no ngrok): in the Twilio console, or because this app
-builds the call URL from `PUBLIC_BASE_URL`, nothing else is needed — Twilio will fetch
-`${URL}/twiml/call`.
+That's it for Twilio — it now fetches TwiML from your Cloud Run URL (no ngrok).
 
----
-
-## 5. Cron via Cloud Scheduler
+## 6. Cron via Cloud Scheduler
 
 ```bash
 URL=$(gcloud run services describe vendor-backend --region us-central1 --format='value(status.url)')
@@ -148,63 +102,50 @@ gcloud scheduler jobs create http vendor-cron \
   --schedule "*/2 * * * *" \
   --uri "${URL}/internal/cron/sweep" \
   --http-method POST \
-  --attempt-deadline 600s
+  --attempt-deadline 900s
 ```
 
-(A sweep every 2 minutes; the endpoint runs it synchronously so it completes before the
-instance scales to zero. `--attempt-deadline 600s` gives the engine time to finish. Lock
-the endpoint down with an OIDC token for production.)
+(A sweep every 2 minutes; it runs synchronously so it completes before the instance
+scales down. Lock this endpoint with an OIDC token for production.)
 
----
-
-## 6. Database — Firestore (already wired)
-
-The app supports two storage backends behind one env var (`DB_BACKEND`):
-`sqlite` (local dev, default) and `firestore` (serverless, Google-native, persists
-across Cloud Run instances). Firestore is already implemented
-(`engine_agent/db_firestore.py`) on the 5 collections — no code change needed, just:
-
-```bash
-# Create the Firestore database once (Native mode)
-gcloud firestore databases create --location=nam5    # or your region
-
-# Grant the Cloud Run service account access
-gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
-  --member="serviceAccount:$(gcloud projects describe $(gcloud config get-value project) \
-     --format='value(projectNumber)')-compute@developer.gserviceaccount.com" \
-  --role="roles/datastore.user"
-```
-
-Then set `DB_BACKEND=firestore` on the service (included in the deploy command below).
-On Cloud Run it authenticates via the service account — no key.
-
-Local testing with the Firestore emulator: `DB_BACKEND=firestore` +
-`FIRESTORE_EMULATOR_HOST=localhost:8080`.
-
----
-
-## 7. Stay free — budget guardrail
-
-Create a budget with an alert so nothing surprises you (and keep the account on the
-free trial — do **not** click "Activate full account" / upgrade, so usage can never be
-auto-charged beyond the $300):
-
-```bash
-# Console → Billing → Budgets & alerts → Create budget: amount $1, alert at 50/90/100%.
-```
-
-Keep costs at ~$0: `--min-instances 0` (already set), Gemini **Flash** (not Pro),
-Firestore free tier, and no GPUs. Twilio (trial credit) and Tavily (free dev key) are
-billed by those providers, not Google.
-
-## 8. Verify
+## 7. Verify
 
 ```bash
 URL=$(gcloud run services describe vendor-backend --region us-central1 --format='value(status.url)')
-curl -s -o /dev/null -w "dashboard %{http_code}\n" $URL/
-curl -s "$URL/twiml/call?token=t&script=hi" | head -c 40      # expect XML
-open $URL                                                     # the live dashboard
+curl -s -o /dev/null -w "dashboard %{http_code}\n" $URL/           # 200
+curl -s "$URL/twiml/call?token=t" | head -c 40                     # <?xml ... (TwiML)
+open $URL                                                          # sign up / log in, create a request
 ```
 
-Create a request on the dashboard → Cloud Scheduler triggers the engine on Gemini →
-Twilio places the real call → ranked result appears. No local processes, no ngrok.
+Create a request in the dashboard → Cloud Scheduler triggers the engine on Gemini →
+vendors are discovered and **called from Cloud Run via Twilio** (multi-turn) → ranked
+result appears. All billed to your project (covered by your $300 while it lasts).
+
+---
+
+## Config reference (Cloud Run env)
+
+| Var | Value | Notes |
+|-----|-------|-------|
+| `DB_BACKEND` | `firestore` | required on Cloud Run |
+| `MODEL_PROVIDER` | `gemini` | |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Vertex model id |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | use Vertex (service-account auth, no key) |
+| `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | your project / `us-central1` | |
+| `PUBLIC_BASE_URL` | the Cloud Run service URL | set after first deploy (step 5) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | secrets | Secret Manager |
+| `TWILIO_FROM_NUMBER` | your Twilio number | |
+| `TWILIO_VOICE` / `TWILIO_LANGUAGE` | `Polly.Raveena` / `en-IN` | |
+| `CALL_OVERRIDE_NUMBER` | optional | test routing (comma-list supported) |
+| `TAVILY_API_KEY` | secret | live vendor discovery |
+| `SESSION_SECRET` | secret | stable login sessions |
+
+## Notes & caveats
+
+- **Twilio trial**: can only call **verified** numbers and allows limited concurrency.
+  For a real demo calling arbitrary restaurants, upgrade the Twilio account.
+- **Cost control**: `--min-instances 0` (scale to zero), Gemini **Flash**, Firestore
+  free tier. Set a Billing budget alert. Don't leave `--min-instances > 0`.
+- **Redeploys**: `gcloud run deploy vendor-backend --source . --region us-central1`
+  (env/secrets persist unless you change them).
+- **Logs**: `gcloud run services logs read vendor-backend --region us-central1`.

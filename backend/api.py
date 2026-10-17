@@ -11,8 +11,15 @@ requests and the engine agent produces the summaries.
 Run: uvicorn backend.api:app --reload
 """
 
+import logging
 import os
 from pathlib import Path
+
+# Emit our INFO logs (cron progress, engine steps, errors) to stdout so they show
+# up in Cloud Run logs. uvicorn doesn't configure app loggers by default.
+logging.basicConfig(level=logging.INFO, force=True)
+for _noisy in ("google_adk", "google_genai", "httpx", "google.api_core", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -20,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from engine_agent import db
 
-from . import auth
+from . import auth, notify
 
 app = FastAPI(title="Vendor Management API", version="0.1.0")
 
@@ -114,9 +121,9 @@ def signup(payload: SignupRequest, response: Response) -> dict:
     if payload.account_type not in ("individual", "corporate"):
         raise HTTPException(status_code=400, detail="account_type must be 'individual' or 'corporate'")
     if payload.account_type == "corporate" and (
-            not payload.company or payload.team_budget is None or not payload.budget_expiry):
+            not payload.company or not payload.budget_expiry):
         raise HTTPException(status_code=400,
-                            detail="Corporate accounts need company, team_budget and budget_expiry")
+                            detail="Corporate accounts need a company and access expiry")
     if db.get_user(email):
         raise HTTPException(status_code=409, detail="Email already registered")
     user = db.create_user(
@@ -160,12 +167,17 @@ def me(request: Request) -> dict:
 # --------------------------------------------------------------------------- #
 
 @app.post("/requests", response_model=RegisterResponse, status_code=201)
-def register_request(payload: RegisterRequest) -> RegisterResponse:
+def register_request(payload: RegisterRequest, request: Request) -> RegisterResponse:
     """Registers a request and enqueues it for the cron job to process."""
     if not payload.requirements:
         raise HTTPException(status_code=400, detail="requirements must not be empty")
+    requirements = dict(payload.requirements)
+    # Remember who to email on booking confirmation (the logged-in client).
+    user = _current_user(request)
+    if user and not requirements.get("client_email"):
+        requirements["client_email"] = user.get("email")
     max_retries = payload.max_retries if payload.max_retries is not None else db.DEFAULT_MAX_RETRIES
-    db.register_request(payload.request_id, payload.requirements, max_retries)
+    db.register_request(payload.request_id, requirements, max_retries)
     return RegisterResponse(request_id=payload.request_id, status="queued")
 
 
@@ -179,20 +191,64 @@ def get_summary(request_id: str) -> SummaryResponse:
 
 
 @app.post("/requests/{request_id}/status")
-def update_status(request_id: str, payload: StatusUpdate) -> dict:
-    """Approves (or unapproves) a vendor for a request."""
+async def update_status(request_id: str, payload: StatusUpdate) -> dict:
+    """Approves (or unapproves) a vendor. On approval, calls the restaurant to
+    confirm the booking and emails the client a confirmation."""
     ok = db.set_vendor_approval(request_id, payload.vendor_id, payload.approved)
     if not ok:
         raise HTTPException(
             status_code=404,
             detail=f"No call on record for vendor {payload.vendor_id} on request {request_id}",
         )
+
+    confirmation = {"call": None, "email": None}
+    if payload.approved:
+        confirmation = await _confirm_booking(request_id, payload.vendor_id)
+
     return {
         "status": "success",
         "request_id": request_id,
         "vendor_id": payload.vendor_id,
         "approved": payload.approved,
+        "confirmation": confirmation,
     }
+
+
+async def _confirm_booking(request_id: str, vendor_id: str) -> dict:
+    """Places a confirmation call to the restaurant and emails the client."""
+    from engine_agent import telephony
+
+    result = db.get_request_result(request_id) or {}
+    req = result.get("requirements", {})
+    vendor = next((v for v in db.list_vendors() if v["id"] == vendor_id), {})
+    vendor_name = vendor.get("name", vendor_id)
+    db.set_request_stage(request_id, "booking")
+
+    event = req.get("event_type", "event")
+    guests = req.get("guest_count", "the")
+    when = req.get("date", "the planned date")
+    msg = (f"Hello from the event planning assistant. Great news — the client has "
+           f"approved {vendor_name} for their {event} on {when} for about {guests} guests. "
+           f"This call confirms the booking. We'll follow up by email with the details. Thank you!")
+
+    out = {"call": "skipped", "email": "skipped"}
+    # Confirmation call to the restaurant (override number in test mode).
+    if telephony.is_configured():
+        to = telephony.override_number() or vendor.get("phone")
+        if to:
+            res = await telephony.place_announcement(to, msg)
+            out["call"] = res.get("status", "error")
+
+    # Email the client.
+    client_email = req.get("client_email")
+    if client_email:
+        subject = f"Booking confirmed: {vendor_name}"
+        body = (f"Hi,\n\nYour {event} on {when} for about {guests} guests is confirmed with "
+                f"{vendor_name}.\n\nSummary:\n{result.get('final_summary', '')}\n\n"
+                f"We've also called the restaurant to confirm.\n\n— Vendor Management")
+        out["email"] = "sent" if notify.send_email(client_email, subject, body) else "failed"
+    db.set_request_stage(request_id, "completed")
+    return out
 
 
 @app.get("/requests")
@@ -276,8 +332,11 @@ async def twiml_call(request: Request) -> Response:
     """Starts the call: greet, then ask the first requirement question."""
     token = request.query_params.get("token", "")
     st = db.get_call_state(token)
-    if not st or not st.get("questions"):
+    if not st:
         return _xml(f"<Response>{_say('Sorry, there was a problem. Goodbye.')}<Hangup/></Response>")
+    if not st.get("questions"):
+        # Announcement (e.g. booking confirmation): just speak and hang up.
+        return _xml(f"<Response>{_say(st.get('greeting', ''))}<Hangup/></Response>")
     return _xml(f"<Response>{_say(st['greeting'])}{_ask(token, st['questions'][0])}</Response>")
 
 
@@ -319,8 +378,10 @@ async def twiml_turn(request: Request) -> Response:
 
     if idx < len(questions):
         db.set_call_state(token, st)
-        ack = "Got it. " if speech else ""
-        return _xml(f"<Response>{_say(ack + 'Next question.')}{_ask(token, questions[idx])}</Response>")
+        # Brief, varied, human acknowledgement — never "next question".
+        acks = ["Got it.", "Okay.", "Sure.", "Thanks.", "Makes sense.", "Perfect."]
+        ack = (acks[idx % len(acks)] + " ") if speech else ""
+        return _xml(f"<Response>{_say(ack)}{_ask(token, questions[idx])}</Response>")
 
     # All requirements covered — finish and store the transcript.
     lines = [f"Agent: {st.get('greeting','')}".strip()]

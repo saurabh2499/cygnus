@@ -20,3 +20,6 @@ opentelemetry-api==1.42.1
 
 # Test-only: in-memory Firestore for local validation (no GCP needed)
 mock-firestore==0.11.0
+
+# Invoke the engine agent on Vertex AI Agent Engine (from the cron)
+google-cloud-aiplatform[agent_engines]==2.5.0
