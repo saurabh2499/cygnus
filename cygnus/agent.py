@@ -1,7 +1,13 @@
 from google.adk.agents import Agent
-from google.adk.models.anthropic_llm import AnthropicGenerateContentConfig, AnthropicLlm
 
-from .tools import get_requirements_summary, record_approval, update_requirements
+from agent_models import build_model
+
+from .tools import (
+    get_request_status,
+    get_requirements_summary,
+    record_approval,
+    update_requirements,
+)
 
 INSTRUCTION = """
 You are an event planning assistant. Your job is to gather clear requirements
@@ -52,14 +58,27 @@ change anything?"
   their feedback, update the requirements with `update_requirements`, then
   show the revised summary and ask for approval again.
 - Never treat the requirements as approved without an explicit yes.
+
+## Checking status of an existing request
+If the user gives a request ID and asks about the status of that request (rather
+than creating a new one), call `get_request_status` with that ID and report back:
+- the processing status (e.g. still processing, completed, or failed), and
+- once completed, the final summary and the ranked list of vendors.
+If no request is found for the ID, tell the user you couldn't find it and
+double-check the ID with them.
 """
 
+_model, _config = build_model("medium")
 root_agent = Agent(
     name="event_requirements_agent",
     description="Gathers event requirements from the user, summarizes them, and gets approval.",
-    model=AnthropicLlm(model="claude-opus-5-5"),
-    # Opus 5.5 defaults to "medium" effort; set it explicitly so it's visible.
-    generate_content_config=AnthropicGenerateContentConfig(effort="medium"),
+    model=_model,
+    generate_content_config=_config,
     instruction=INSTRUCTION,
-    tools=[update_requirements, get_requirements_summary, record_approval],
+    tools=[
+        update_requirements,
+        get_requirements_summary,
+        record_approval,
+        get_request_status,
+    ],
 )
