@@ -6,7 +6,7 @@ Scheduler** driving the cron. Cloud Run gives a public HTTPS URL, so **Twilio
 reaches the call webhooks directly — no ngrok in production.**
 
 The app is already built for this: `MODEL_PROVIDER=gemini` + Vertex, and
-`DB_BACKEND=firestore`. The code needs no changes — this is all config.
+Firestore, the same database used locally. The code needs no changes — this is all config.
 
 > Replace `gen-lang-client-0800138646` below with your own project if different.
 > Pick one region and use it everywhere (examples use `us-central1`).
@@ -29,8 +29,7 @@ gcloud services enable \
 
 ## 1. Create the Firestore database (once)
 
-Firestore is **required** on Cloud Run — SQLite can't persist across scale-to-zero
-instances, and the multi-turn calls rely on shared `call_state` that any instance
+Firestore is the only database (local and Cloud Run). Cloud Run scales to zero, and the multi-turn calls rely on shared `call_state` that any instance
 can read (Firestore provides that).
 
 ```bash
@@ -62,7 +61,7 @@ gcloud run deploy vendor-backend \
   --min-instances 0 \
   --cpu 1 --memory 512Mi \
   --timeout 900 \
-  --set-env-vars DB_BACKEND=firestore,MODEL_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=us-central1,TWILIO_FROM_NUMBER=+1XXXXXXXXXX,TWILIO_VOICE=Polly.Raveena,TWILIO_LANGUAGE=en-IN \
+  --set-env-vars MODEL_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=us-central1,TWILIO_FROM_NUMBER=+1XXXXXXXXXX,TWILIO_VOICE=Polly.Raveena,TWILIO_LANGUAGE=en-IN \
   --set-secrets TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,SESSION_SECRET=SESSION_SECRET:latest
 ```
 
@@ -127,7 +126,6 @@ result appears. All billed to your project (covered by your $300 while it lasts)
 
 | Var | Value | Notes |
 |-----|-------|-------|
-| `DB_BACKEND` | `firestore` | required on Cloud Run |
 | `MODEL_PROVIDER` | `gemini` | |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Vertex model id |
 | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` | use Vertex (service-account auth, no key) |

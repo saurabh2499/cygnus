@@ -36,8 +36,9 @@ this job is a retry), you'll reuse them and only call the ones still missing.
 
 ## Step 2: Find vendors (discover nearby/trending first)
 First call `discover_vendors(request_id)`. It searches the web for real
-restaurants and cafes near the request's location, including what's popular and
-trending, and returns candidate venues.
+restaurants and cafes (or hotels, when the request's `vendor_type` is "hotel")
+near the request's location, including what's popular and trending, and returns
+candidate venues.
 - If it returns `status: "success"`, use those vendor ids.
 - If it returns `status: "unavailable"` or `"no_results"` (e.g. search isn't
   configured), fall back to `match_vendors(request_id)` and use its vendor ids.
@@ -59,7 +60,11 @@ and save it with `save_vendor_summary(request_id, vendor_id, summary)`.
 Compare the vendors and call `save_final_summary(request_id, final_summary,
 ranking)`. Rank best-fit first, giving each vendor a 1-based `rank`, its
 `vendor_id`, `vendor_name`, and a one-line `reason`. Base the ranking on how well
-each vendor meets the must-haves first, then nice-to-haves, fit, and price.
+each vendor meets the must-haves first, then nice-to-haves, fit, and price. Include
+EVERY called vendor in the ranking, putting vendors whose calls weren't answered
+last with a reason saying so. For
+hotels, "fit" means room availability for the stay dates and number of rooms, and
+price means the nightly rate versus the budget.
 
 When `save_final_summary` succeeds, reply with a brief confirmation that the
 request has been processed and summarised. Keep your narration between tool calls

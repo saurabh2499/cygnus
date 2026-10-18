@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# NOTE: do NOT override VENDOR_DB_PATH — we use the real shared DB the live
+# NOTE: we use the real shared Firestore DB the live
 # cron worker is polling, so this is a true integration test.
 
 import engine_agent.db as db                 # noqa: E402 (loads .env)

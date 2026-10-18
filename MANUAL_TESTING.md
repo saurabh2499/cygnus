@@ -23,7 +23,7 @@ test -f .env && echo ".env present" || echo "MISSING .env (copy from .env.exampl
 
 ## 1. Offline validation (fast, no cost, no network)
 
-Exercises imports, DB, matching, job queue + retry, cron, API, chatbot wiring on a throwaway SQLite DB.
+Exercises imports, DB, matching, job queue + retry, cron, API, chatbot wiring on an in-memory mock Firestore.
 
 ```bash
 python scripts/validate.py
@@ -186,23 +186,15 @@ curl -s "<PUBLIC_BASE_URL>/twiml/call?token=t&script=hi" | head -c 40
 
 ---
 
-## 9. Database backends
+## 9. Database (Firestore)
 
-### 9a. SQLite (default) — already used above
+Local runs use Firestore too — start the emulator (`gcloud emulators firestore start --host-port=localhost:8080`) or use a real project.
 ```bash
-python -c "from engine_agent import db; print('backend:', db.backend())"   # expect: sqlite
-```
-
-### 9b. Firestore — against the local emulator
-Needs the Firestore emulator (`gcloud emulators firestore start --host-port=localhost:8080`).
-```bash
-export DB_BACKEND=firestore
 export FIRESTORE_EMULATOR_HOST=localhost:8080
 python -c "from engine_agent import db; print('backend:', db.backend())"   # expect: firestore
 # then run the app (steps 3–5) with these env vars set; data lands in Firestore collections
 ```
-✅ `db.backend()` prints `firestore`. Requests/restaurants/summaries/confirmations appear in the emulator (or real Firestore on GCP).
-No emulator handy? The backend logic is covered by the mock-Firestore run in development; on Cloud Run it uses real Firestore automatically.
+✅ Requests/restaurants/summaries/confirmations appear in the emulator (or real Firestore on GCP).
 
 ---
 
@@ -227,4 +219,4 @@ pkill -f "scheduler.cron"
 | 6 | Chatbot gather/approve/status |
 | 7 | Discovery searches new locations, caches known ones |
 | 8 | Calling agent (simulated and, with a tunnel, real Twilio calls) |
-| 9 | SQLite ↔ Firestore backend switch |
+| 9 | Firestore (emulator / real project) connection |

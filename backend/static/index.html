@@ -160,6 +160,11 @@
                     border-radius:10px; padding:10px 11px; transition:border-color .15s, box-shadow .15s; }
   input:focus, textarea:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(37,99,235,.14); }
   .modal .foot { display:flex; gap:10px; justify-content:flex-end; padding:15px 18px; border-top:1px solid var(--border); }
+  .tabs { display:flex; gap:6px; padding:12px 18px 0; }
+  .tab { flex:1; padding:9px 12px; border:1px solid var(--border); border-radius:10px; background:var(--muted);
+         color:var(--muted-fg); font:inherit; font-weight:600; cursor:pointer; }
+  .tab.active { background:var(--primary); border-color:var(--primary); color:#fff; }
+  .modal.t-restaurant .only-hotel, .modal.t-hotel .only-restaurant { display:none; }
   .hint { font-size:12px; color:var(--muted-fg); }
   .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(8px);
            background:var(--fg); color:#fff; padding:11px 17px; border-radius:11px; font-size:13.5px;
@@ -213,6 +218,55 @@
     *, *::before, *::after { animation-duration:.001ms!important; animation-iteration-count:1!important;
                              transition-duration:.001ms!important; }
   }
+
+  /* ---- simplified layout: requests on the left, vendors on the right ---- */
+  .glass, .card { background:#fff; backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:none;
+                  border:1px solid var(--border); }
+  .card > h2 { font-size:22px; text-transform:none; letter-spacing:0; color:var(--fg); border:0;
+               padding:18px 18px 6px; font-weight:700; }
+  .grid { grid-template-columns:minmax(260px,340px) 1fr; }
+  .grid > section[aria-label="Requests"] { display:flex; flex-direction:column; position:sticky; top:84px;
+      height:calc(100vh - 110px); min-height:320px; }
+  ul.reqlist { padding:6px 12px; flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto; }
+  .newwrap { flex:none; border-top:1px solid var(--border); background:#fff; }
+  @media (max-width:860px){ .grid > section[aria-label="Requests"] { position:static; height:60vh; } }
+  li.req { background:#f1f3f5; margin-bottom:10px; border-radius:10px; padding:13px 15px; gap:4px; }
+  li.req:hover { background:#e9ecf1; border-color:transparent; }
+  li.req.active { background:#e8effd; border-color:transparent; box-shadow:none; }
+  li.req .meta.idline { display:none; }
+  .badge { background:transparent!important; padding:0; font-weight:500; font-size:13.5px; }
+  .badge::before { width:8px; height:8px; }
+  .newwrap { padding:8px 12px 16px; }
+  .newwrap button { padding:13px; border-radius:8px; font-size:16px; font-weight:600; }
+  .detail .pad { padding:8px 22px 22px; }
+  .detail .dh .et { font-family:var(--sans); font-weight:700; font-size:22px; }
+  .detail .idline { display:none; }
+  .chips { margin:6px 0 16px; gap:4px 14px; }
+  .chip { background:none; border:0; padding:0; color:var(--muted-fg); font-size:14.5px; }
+  .section-title { text-transform:none; letter-spacing:0; font-size:14px; margin:20px 0 10px; }
+  .final { box-shadow:none; background:#f8f9fb; }
+
+  .vendor { background:#f1f3f5; border:0; box-shadow:none; border-radius:10px; padding:0; margin-bottom:10px; }
+  .vendor.top { background:#e8f3ea; box-shadow:none; }
+  .vendor .vrow { display:flex; align-items:center; gap:16px; padding:13px 16px; cursor:pointer; }
+  .vendor .rank { width:38px; height:38px; font-size:15px; background:#5b6068; color:#fff; }
+  .vendor.top .rank { background:#43a047; color:#fff; }
+  .vendor .vname { font-weight:700; font-size:17px; min-width:150px; }
+  .vendor .reason { flex:1; margin:0; color:var(--muted-fg); font-size:14.5px; }
+  .vendor .vfoot { margin:0; }
+  .vendor .maplink { color:var(--primary); font-size:13.5px; font-weight:600; text-decoration:none; white-space:nowrap; }
+  .vendor .maplink:hover { text-decoration:underline; }
+  .vendor .vfoot button { min-width:116px; justify-content:center; font-weight:600; padding:10px 16px;
+                          background:#fff; border:1px solid var(--border); border-radius:8px; }
+  .vendor .vfoot button.primary { background:#43a047; border-color:#43a047; color:#fff; }
+  .vendor .vdetail { display:none; padding:4px 18px 16px 70px; border-top:1px solid rgba(0,0,0,.06); }
+  .vendor.open .vdetail { display:block; }
+  .vendor .caret { color:var(--muted-fg); transition:transform .15s; }
+  .vendor.open .caret { transform:rotate(90deg); }
+  .dgrid { display:grid; grid-template-columns:130px 1fr; gap:7px 14px; margin-top:12px; font-size:14px; }
+  .dgrid dt { color:var(--muted-fg); font-weight:600; } .dgrid dd { margin:0; word-break:break-word; }
+  .vdetail .vsum { margin-top:12px; font-size:14px; white-space:pre-wrap; }
+  @media (max-width:700px){ .vendor .vrow { flex-wrap:wrap; } .vendor .vdetail { padding-left:18px; } }
 </style>
 </head>
 <body>
@@ -225,9 +279,6 @@
   </div>
   <span class="live"><span class="dot"></span> live</span>
   <span class="spacer"></span>
-  <button class="primary" id="newBtn">
-    <svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New request
-  </button>
   <a class="ghost" href="/docs" target="_blank" rel="noopener">
     API docs
     <svg class="i" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></svg>
@@ -244,7 +295,7 @@
 <div class="budgetbar" id="budgetBar" hidden></div>
 
 <div class="wrap" id="appMain" hidden>
-  <nav class="pipeline" aria-label="Processing pipeline">
+  <nav class="pipeline" aria-label="Processing pipeline" hidden>
     <span class="step">Chatbot · requirements</span><span class="arr" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span>
     <span class="step">Cron · queue</span><span class="arr" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span>
     <span class="step">Engine · match</span><span class="arr" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span>
@@ -256,6 +307,7 @@
     <section class="card glass" aria-label="Requests">
       <h2>Requests</h2>
       <ul class="reqlist" id="reqlist"><li class="empty">Loading…</li></ul>
+      <div class="newwrap"><button class="primary block" id="newBtn" type="button">+ New request</button></div>
     </section>
     <section class="card glass detail" id="detail" aria-label="Request details">
       <h2>Details</h2>
@@ -265,12 +317,18 @@
 </div>
 
 <div class="modal-bg" id="modalBg" role="dialog" aria-modal="true" aria-label="New request">
-  <div class="modal">
+  <div class="modal t-restaurant" id="modalBox">
     <h3>New request</h3>
+    <div class="tabs" role="tablist">
+      <button class="tab active" role="tab" data-type="restaurant" type="button">Restaurant</button>
+      <button class="tab" role="tab" data-type="hotel" type="button">Hotel</button>
+    </div>
     <div class="body">
-      <div><label for="f_event">Event type</label><input id="f_event" placeholder="e.g. company offsite dinner" /></div>
+      <div class="only-restaurant"><label for="f_event">Event type</label><input id="f_event" placeholder="e.g. company offsite dinner" /></div>
       <div><label for="f_guests">Guest count</label><input id="f_guests" type="number" min="1" placeholder="60" /></div>
-      <div><label for="f_date">Date</label><input id="f_date" type="date" /></div>
+      <div class="only-hotel"><label for="f_rooms">Rooms</label><input id="f_rooms" type="number" min="1" placeholder="e.g. 3" /></div>
+      <div><label for="f_date"><span class="only-restaurant">Date</span><span class="only-hotel">Check-in</span></label><input id="f_date" type="date" /></div>
+      <div class="only-hotel"><label for="f_checkout">Check-out</label><input id="f_checkout" type="date" /></div>
       <div><label for="f_location">Location</label><input id="f_location" placeholder="e.g. downtown Chicago" /></div>
       <div><label for="f_radius">Search radius <span class="hint">(km, optional)</span></label>
            <input id="f_radius" type="number" min="1" step="1" placeholder="e.g. 10" /></div>
@@ -279,8 +337,10 @@
            <input id="f_must" placeholder="catering, av, private_room" /></div>
       <div><label for="f_nice">Nice-to-haves <span class="hint">(comma separated)</span></label>
            <input id="f_nice" placeholder="vegan, parking" /></div>
-      <div class="hint">Features vendors can offer: catering, av, private_room, outdoor, parking,
+      <div class="hint only-restaurant">Features vendors can offer: catering, av, private_room, outdoor, parking,
            live_music, decor, vegan, kids_friendly, and more.</div>
+      <div class="hint only-hotel">Amenities: breakfast, wifi, pool, gym, spa, parking, airport_shuttle,
+           pet_friendly, free_cancellation, conference_room, and more.</div>
     </div>
     <div class="foot">
       <button id="cancelBtn">Cancel</button>
@@ -347,6 +407,7 @@
 const $ = (s) => document.querySelector(s);
 let selected = null;
 let lastListJSON = "";
+const openVendors = new Set();
 
 const CHECK = '<svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
 const STATUS = {
@@ -388,7 +449,7 @@ async function loadList(){
     const status = shortStatus(r);
     const retry = (r.attempt_count>1 && status!=="completed") ? ` · try ${r.attempt_count}/${r.max_retries}` : "";
     return `<li class="req ${selected===r.request_id?'active':''}" data-id="${esc(r.request_id)}" tabindex="0" role="button">
-      <div class="row1"><span class="ev">${esc(r.event_type||"(untitled)")}</span>${badge(status)}</div>
+      <div class="row1"><span class="ev">${r.vendor_type==="hotel"?"🏨 ":""}${esc(r.event_type||"(untitled)")}</span>${badge(status)}</div>
       <div class="meta">${r.guest_count?esc(r.guest_count)+" guests · ":""}${esc(r.location||"")}${retry}</div>
       <div class="meta idline">${esc(r.request_id)}</div>
     </li>`;
@@ -416,7 +477,7 @@ async function loadDetail(){
     <div class="dh"><span class="et">${esc(req.event_type||"(untitled)")}</span>${badge(status)}</div>
     <div class="idline" style="margin-top:6px">${esc(d.request_id)}</div>
     <div class="chips">
-      ${chip("Guests", req.guest_count)}${chip("Date", req.date)}${chip("Location", req.location)}${chip("Radius", req.radius_km ? req.radius_km+" km" : "")}${chip("Budget", req.budget)}
+      ${chip("Type", req.vendor_type==="hotel"?"Hotel":"Restaurant")}${chip("Guests", req.guest_count)}${chip("Rooms", req.rooms)}${req.vendor_type==="hotel"?chip("Check-in", req.date)+chip("Check-out", req.check_out):chip("Date", req.date)}${chip("Location", req.location)}${chip("Radius", req.radius_km ? req.radius_km+" km" : "")}${chip("Budget", req.budget)}
       ${chip("Must-haves", asList(req.must_haves))}${chip("Nice-to-haves", asList(req.nice_to_haves))}
     </div>`;
 
@@ -429,22 +490,43 @@ async function loadDetail(){
     body += `<div class="section-title">Final summary</div><div class="final">${esc(d.final_summary||"")}</div>`;
     const ranking = d.ranking || [];
     const summaries = {}; (d.vendors||[]).forEach(v => summaries[v.vendor_id]=v);
+    const anyApproved = (d.vendors||[]).some(v => v.approved);
     body += `<div class="section-title">Vendor ranking</div>`;
     body += ranking.map(r => {
       const v = summaries[r.vendor_id] || {};
       const approved = v.approved;
-      return `<div class="vendor ${r.rank===1?'top':''}">
-        <div class="vh">
+      const p = v.profile || {};
+      const mapUrl = "https://www.google.com/maps/search/?api=1&query=" +
+        encodeURIComponent([p.name || r.vendor_name, p.area, req.location].filter(Boolean).join(", "));
+      const rows = [
+        ["Type", p.vendor_type==="hotel" ? "Hotel" : "Restaurant"],
+        ["Location", `<a href="${mapUrl}" target="_blank" rel="noopener">View on Google Maps</a>`],
+        ["Area", p.area], ["Cuisine / style", asList(p.cuisine_types)],
+        ["Price tier", p.price_tier ? "$".repeat(p.price_tier) : ""],
+        ["Rating", p.rating], ["Capacity", p.capacity], ["Phone", p.phone],
+        ["Features", asList((p.features||[]).map(f=>String(f).replace(/_/g," ")))],
+        ["About", p.description],
+        ["Website", p.source_url ? `<a href="${esc(p.source_url)}" target="_blank" rel="noopener">${esc(p.source_url)}</a>` : ""],
+      ].filter(([k,val]) => val !== "" && val != null);
+      const detailHtml = rows.map(([k,val]) => `<dt>${k}</dt><dd>${(k==="Website"||k==="Location")?val:esc(val)}</dd>`).join("");
+      return `<div class="vendor ${r.rank===1?'top':''} ${openVendors.has(r.vendor_id)?'open':''}" data-vid="${esc(r.vendor_id)}">
+        <div class="vrow" tabindex="0" role="button" aria-expanded="${openVendors.has(r.vendor_id)}">
           <span class="rank r${r.rank}">${r.rank}</span>
           <span class="vname">${esc(r.vendor_name || r.vendor_id)}</span>
+          <span class="reason">${esc(r.reason||"")}</span>
+          <a class="maplink" href="${mapUrl}" target="_blank" rel="noopener" title="Open in Google Maps" onclick="event.stopPropagation()">📍 Map</a>
           ${approved ? `<span class="approved-tag">${CHECK} Approved</span>`:""}
+          <span class="vfoot">
+            ${approved
+              ? `<button data-approve="${esc(r.vendor_id)}" data-val="false">Unapprove</button>`
+              : anyApproved ? ""
+              : `<button class="primary" data-approve="${esc(r.vendor_id)}" data-val="true">Approve</button>`}
+          </span>
+          <svg class="i caret" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
         </div>
-        <div class="reason">${esc(r.reason||"")}</div>
-        ${v.summary?`<div class="vsum">${esc(v.summary)}</div>`:""}
-        <div class="vfoot">
-          ${approved
-            ? `<button data-approve="${esc(r.vendor_id)}" data-val="false">Unapprove</button>`
-            : `<button class="primary" data-approve="${esc(r.vendor_id)}" data-val="true">${CHECK} Approve this vendor</button>`}
+        <div class="vdetail">
+          ${v.summary?`<div class="vsum"><b>Call summary</b>\n${esc(v.summary)}</div>`:""}
+          <dl class="dgrid">${detailHtml || "<dd>No further details on record.</dd>"}</dl>
         </div>
       </div>`;
     }).join("") || `<div class="empty">No vendors were ranked.</div>`;
@@ -452,7 +534,17 @@ async function loadDetail(){
   body += `</div>`;
   $("#detail").innerHTML = `<h2>Details</h2>${body}`;
 
-  $("#detail").querySelectorAll("[data-approve]").forEach(btn => btn.onclick = async () => {
+  $("#detail").querySelectorAll(".vendor").forEach(el => {
+    const toggle = () => {
+      const id = el.dataset.vid, open = el.classList.toggle("open");
+      open ? openVendors.add(id) : openVendors.delete(id);
+    };
+    const row = el.querySelector(".vrow");
+    row.onclick = toggle;
+    row.onkeydown = (e) => { if (e.target===row && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); toggle(); } };
+  });
+  $("#detail").querySelectorAll("[data-approve]").forEach(btn => btn.onclick = async (ev) => {
+    ev.stopPropagation();
     btn.disabled = true;
     try {
       const res = await fetch(`/requests/${encodeURIComponent(selected)}/status`, {
@@ -466,18 +558,38 @@ async function loadDetail(){
 }
 
 // New request modal
+let vendorType = "restaurant";
+function setVendorType(t){
+  vendorType = t;
+  $("#modalBox").className = "modal t-" + t;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.type===t));
+  $("#f_must").placeholder = t==="hotel" ? "breakfast, wifi, parking" : "catering, av, private_room";
+  $("#f_nice").placeholder = t==="hotel" ? "pool, gym, airport_shuttle" : "vegan, parking";
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => setVendorType(b.dataset.type));
 $("#newBtn").onclick = () => $("#modalBg").classList.add("open");
 $("#cancelBtn").onclick = () => $("#modalBg").classList.remove("open");
 $("#modalBg").onclick = (e) => { if (e.target.id==="modalBg") $("#modalBg").classList.remove("open"); };
 document.addEventListener("keydown", (e) => { if (e.key==="Escape") $("#modalBg").classList.remove("open"); });
 
+const todayISO = () => { const d = new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
+$("#f_date").min = todayISO();
+$("#f_date").onchange = () => { $("#f_checkout").min = $("#f_date").value || todayISO(); };
+$("#f_checkout").min = todayISO();
 $("#submitBtn").onclick = async () => {
   const splitList = s => s.split(",").map(x=>x.trim()).filter(Boolean);
   const must = splitList($("#f_must").value);
-  const event_type = $("#f_event").value.trim();
-  if (!event_type || !must.length){ toast("Event type and at least one must-have are required"); return; }
+  const hotel = vendorType === "hotel";
+  const event_type = hotel ? "Hotel stay" : $("#f_event").value.trim();
+  if (!event_type || !must.length){ toast(hotel ? "At least one must-have is required" : "Event type and at least one must-have are required"); return; }
+  if (hotel && (!$("#f_date").value || !$("#f_checkout").value)){ toast("Check-in and check-out dates are required"); return; }
+  if ($("#f_date").value && $("#f_date").value < todayISO()){ toast(hotel ? "Check-in date cannot be in the past" : "Event date cannot be in the past"); return; }
+  if (hotel && $("#f_checkout").value <= $("#f_date").value){ toast("Check-out must be after check-in"); return; }
   const requirements = {
+    vendor_type: vendorType,
     event_type,
+    rooms: hotel && $("#f_rooms").value ? Number($("#f_rooms").value) : undefined,
+    check_out: hotel ? $("#f_checkout").value : undefined,
     guest_count: $("#f_guests").value ? Number($("#f_guests").value) : undefined,
     date: $("#f_date").value || undefined,
     location: $("#f_location").value.trim() || undefined,
@@ -494,7 +606,7 @@ $("#submitBtn").onclick = async () => {
     if (res.ok){
       toast("Request queued — the cron job will process it shortly");
       $("#modalBg").classList.remove("open");
-      ["f_event","f_guests","f_date","f_location","f_radius","f_budget","f_must","f_nice"].forEach(id=>$("#"+id).value="");
+      ["f_event","f_guests","f_rooms","f_checkout","f_date","f_location","f_radius","f_budget","f_must","f_nice"].forEach(id=>$("#"+id).value="");
       selected = request_id; lastListJSON=""; await loadList(); loadDetail();
     } else { toast("Register failed: "+res.status); }
   } catch { toast("Network error"); }

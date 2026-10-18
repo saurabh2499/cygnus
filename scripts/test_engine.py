@@ -17,13 +17,12 @@ Usage:  python scripts/test_engine.py
 import asyncio
 import os
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ["VENDOR_DB_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="vm_engine_"), "engine.db"
-)
+from mockfirestore import MockFirestore  # noqa: E402  in-memory Firestore, no GCP needed
+from engine_agent import firestore_db as _fs  # noqa: E402
+_fs.set_client(MockFirestore())
 
 import engine_agent.db as db                      # noqa: E402 (also loads .env)
 from engine_agent.agent import root_agent         # noqa: E402

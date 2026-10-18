@@ -80,13 +80,15 @@ def _transcript_from_state(st: dict) -> str:
     return "\n".join(l for l in lines if l)
 
 
-def _place_sync(to: str, greeting: str, questions: list, wait: int) -> dict:
+def _place_sync(to: str, greeting: str, questions: list, wait: int,
+                plan: dict | None = None) -> dict:
     client = _client()
     token = uuid.uuid4().hex
     # Seed the conversation plan the webhook will drive, keyed by call token.
     db.set_call_state(token, {
         "greeting": greeting, "questions": questions,
         "answers": [], "idx": 0, "status": "in_progress", "transcript": None,
+        **(plan or {}),
     })
     base = os.environ["PUBLIC_BASE_URL"].rstrip("/")
     try:
@@ -141,10 +143,11 @@ async def place_announcement(to: str, message: str) -> dict:
     return await asyncio.to_thread(_place_announcement_sync, to, message)
 
 
-async def place_call(to: str, greeting: str, questions: list, wait: int = 240) -> dict:
+async def place_call(to: str, greeting: str, questions: list, wait: int = 240,
+                     plan: dict | None = None) -> dict:
     """Places one real multi-turn call: asks each question, waits for the vendor's
     spoken answer, then moves to the next, and returns the transcript.
 
     Runs the blocking Twilio work in a thread so calls in the same batch fan out
     concurrently (bounded by the engine's per-request semaphore)."""
-    return await asyncio.to_thread(_place_sync, to, greeting, questions, wait)
+    return await asyncio.to_thread(_place_sync, to, greeting, questions, wait, plan)

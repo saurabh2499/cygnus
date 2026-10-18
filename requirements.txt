@@ -10,7 +10,7 @@ fastapi==0.141.1
 uvicorn==0.54.0
 pydantic==2.13.5
 
-# Loads .env (ANTHROPIC_API_KEY, VENDOR_DB_PATH) for cron/backend/agents
+# Loads .env (ANTHROPIC_API_KEY, GOOGLE_CLOUD_PROJECT) for cron/backend/agents
 python-dotenv==1.2.3
 # Real phone calls (calling agent)
 twilio==9.11.2

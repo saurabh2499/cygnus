@@ -1,11 +1,10 @@
 """Firestore implementation of the db repository interface.
 
-Implements the same functions as ``db_sqlite`` (so the rest of the app is
-unchanged) on top of the 5 collections defined in ``firestore_db``:
+The app's only storage layer (``engine_agent.db`` re-exports it), on top of the 5 collections defined in ``firestore_db``:
 
   requests · restaurants · conversation_summaries · final_summaries · user_confirmations
 
-The old SQLite model carried a few extra fields (vendor features/area/price_tier,
+The legacy relational model carried a few extra fields (vendor features/area/price_tier,
 call transcript/rank, result status, ranking). Firestore is schemaless, so those
 ride along as additional fields on the canonical documents:
   - restaurants:          + features, area, price_tier, source, source_url,
@@ -92,7 +91,7 @@ def claim_due_jobs(limit: int) -> list[dict]:
         fs.update_request(rid, request_status="in_progress", attempt_count=attempt,
                           stage="picked")
         d = fs.get_request(rid)
-        # Normalize to the same keys the cron's _run_job expects (SQLite jobs schema):
+        # Normalize to the same keys the cron's _run_job expects (job schema):
         d["request_id"] = d.get("id")
         d["status"] = d.get("request_status")
         claimed.append(d)
@@ -141,6 +140,7 @@ def _restaurant_to_vendor(d: dict) -> dict:
         "cuisine_types": d.get("cuisine_types") or [],
         "features": d.get("features") or [],
         "source": d.get("source", "seed"),
+        "vendor_type": d.get("vendor_type") or "restaurant",
         "source_url": d.get("source_url"),
         "description": d.get("description") or d.get("comments_from_restaurant"),
         "search_location": d.get("search_location"),
@@ -170,6 +170,7 @@ def upsert_vendor(vendor: dict) -> str:
         "price_tier": vendor.get("price_tier"),
         "features": vendor.get("features") or [],
         "source": vendor.get("source", "web"),
+        "vendor_type": vendor.get("vendor_type") or "restaurant",
         "source_url": vendor.get("source_url"),
         "description": vendor.get("description"),
         "search_location": vendor.get("search_location"),
@@ -185,7 +186,7 @@ def upsert_vendor(vendor: dict) -> str:
     return rid
 
 
-def get_web_vendors_for_location(location: str) -> list[dict]:
+def get_web_vendors_for_location(location: str, vendor_type: str = "restaurant") -> list[dict]:
     norm = (location or "").strip().lower()
     if not norm:
         return []
@@ -193,7 +194,8 @@ def get_web_vendors_for_location(location: str) -> list[dict]:
     out = []
     for snap in col.where("source", "==", "web").stream():
         d = snap.to_dict()
-        if (d.get("search_location") or "") == norm:
+        if (d.get("search_location") or "") == norm and \
+                (d.get("vendor_type") or "restaurant") == vendor_type:
             out.append(_restaurant_to_vendor(d))
     return out
 
@@ -265,6 +267,9 @@ def get_request_result(request_id: str) -> dict | None:
         return None
     requirements = (req or {}).get("requirements_payload") or {}
     calls_sorted = sorted(calls, key=lambda c: (c["rank"] is None, c["rank"] or 0))
+    catalog = {v["id"]: v for v in list_vendors()}
+    keep = ("name", "phone", "area", "capacity", "price_tier", "rating", "cuisine_types",
+            "features", "vendor_type", "source", "source_url", "description")
     return {
         "request_id": request_id,
         "requirements": requirements,
@@ -275,7 +280,8 @@ def get_request_result(request_id: str) -> dict | None:
         "ranking": (final or {}).get("ranking") or [],
         "vendors": [
             {"vendor_id": c["vendor_id"], "status": c["status"], "rank": c["rank"],
-             "summary": c["summary"], "approved": c["approved"]}
+             "summary": c["summary"], "approved": c["approved"],
+             "profile": {k: catalog.get(c["vendor_id"], {}).get(k) for k in keep}}
             for c in calls_sorted
         ],
     }
@@ -311,6 +317,7 @@ def list_requests() -> list[dict]:
         final = fs.get_final_summary(req["id"])
         rows.append({
             "request_id": req["id"],
+            "vendor_type": reqs.get("vendor_type") or "restaurant",
             "event_type": reqs.get("event_type"),
             "guest_count": reqs.get("guest_count"),
             "location": reqs.get("location"),

@@ -90,6 +90,7 @@ def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> d
     if not location:
         return {"status": "error", "message": "Request has no location to search near."}
     norm = location.strip().lower()
+    vtype = requirements.get("vendor_type") or "restaurant"
 
     def _payload(vendors, source):
         return {
@@ -104,7 +105,7 @@ def discover_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> d
         }
 
     # Known location -> reuse cached venues from the DB, no web search.
-    cached = db.get_web_vendors_for_location(norm)
+    cached = db.get_web_vendors_for_location(norm, vtype)
     if cached:
         return _payload(cached[:limit], source="cache")
 
@@ -142,10 +143,15 @@ def match_vendors(request_id: str, limit: int = db.DEFAULT_VENDOR_LIMIT) -> dict
     must = set(_as_list(requirements.get("must_haves")))
     nice = set(_as_list(requirements.get("nice_to_haves")))
     guests = requirements.get("guest_count") or 0
+    if requirements.get("vendor_type") == "hotel":
+        guests = 0  # hotels have rooms, not seating capacity
     location = str(requirements.get("location", "")).lower()
 
     scored = []
+    vtype = requirements.get("vendor_type") or "restaurant"
     for v in db.list_vendors():
+        if (v.get("vendor_type") or "restaurant") != vtype:
+            continue
         feats = set(v["features"])
         # Hard filter: must be able to seat the party (when a count is known).
         if guests and v["capacity"] and v["capacity"] < guests:
@@ -299,6 +305,24 @@ def save_final_summary(request_id: str, final_summary: str,
         Confirmation that the final summary was saved.
     """
     db.init_db()
+    # Never drop a called vendor: ones the model left out (e.g. the call wasn't
+    # answered) are appended after the ranked ones, so the client still sees them.
+    ranking = list(ranking or [])
+    names = {v["id"]: v["name"] for v in db.list_vendors()}
+    ranked_ids = {r.get("vendor_id") for r in ranking}
+    next_rank = max([r.get("rank") or 0 for r in ranking], default=0) + 1
+    for c in db.get_calls(request_id):
+        vid = c["vendor_id"]
+        if vid in ranked_ids or c["status"] == "failed":
+            continue
+        ranking.append({"rank": next_rank, "vendor_id": vid,
+                        "vendor_name": names.get(vid, vid),
+                        "reason": "Call not answered or incomplete — availability and pricing unconfirmed."})
+        if not c["summary"]:
+            db.set_vendor_summary(request_id, vid,
+                                  "The call was not answered or ended early, so no availability "
+                                  "or pricing details were collected.", next_rank)
+        next_rank += 1
     db.set_final_summary(request_id, status="completed",
                          final_summary=final_summary, ranking=ranking)
     # Mirror ranks onto the per-vendor call records for easy lookup.

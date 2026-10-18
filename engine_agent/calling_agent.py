@@ -28,16 +28,30 @@ _MODEL, _CONFIG = build_model("low")
 APP_NAME = "vendor_calling_agent"
 
 INSTRUCTION = """
-You are a calling agent placing a phone call to a vendor on behalf of a client
-who is planning an event. You are given the vendor's profile and the client's
+You are a calling agent placing a phone call to a vendor (a restaurant/venue, or a
+hotel when the requirements' vendor_type is "hotel") on behalf of a client.
+For a hotel, introduce the stay (ALWAYS state both the check-in and the check-out
+date yourself, even if the vendor doesn't ask; the number of nights too; number of rooms and
+guests, location), ask about room availability, the nightly rate versus the budget,
+amenities (breakfast, wifi, parking...), and the cancellation policy. You are given the vendor's profile and the client's
 requirements, and you must hold the call and return ONLY the transcript.
 
 Conduct a natural, concise phone conversation that:
+- FIRST confirms you reached the right place ("Am I speaking with <vendor name>?"),
+  and only continues once the vendor confirms,
 - introduces the call and states the event type, date, guest count, and location,
 - asks whether the vendor is available and can meet the client's must-haves,
-- asks about pricing relative to the client's budget,
+- asks for the price (for a hotel: the per-night rate for one room). NEVER mention
+  the client's budget up front. Work out the total yourself (restaurant: the quote;
+  hotel: nightly rate x rooms x nights). Only if that total is OVER the budget, say it
+  is over budget and ask politely for a discount; otherwise don't mention the budget,
 - probes the nice-to-haves and any special needs,
 - confirms next steps.
+
+Sound like a real person, not a script: use short sentences, natural fillers
+("okay, great", "got it"), and react to what the vendor just said. If the vendor
+asks you to repeat, rephrase, or hold on, do that politely (repeat the question
+in simpler words, or wait) and only move on once they have actually answered.
 
 Play BOTH sides of the call realistically: the vendor answers from its profile
 (availability, what it offers, rough pricing for its price tier) and may not be
@@ -81,27 +95,75 @@ def _call_prompt(vendor: dict, requirements: dict) -> str:
     )
 
 
+def _nights(req: dict) -> str:
+    """' (3 nights)' when both dates parse, else ''."""
+    from datetime import date
+    try:
+        n = (date.fromisoformat(str(req["check_out"])) - date.fromisoformat(str(req["date"]))).days
+    except (KeyError, ValueError):
+        return ""
+    return f" ({n} night{'s' if n != 1 else ''})" if n > 0 else ""
+
+
+def _say_date(value) -> str:
+    """'2026-12-01' -> 'December 1, 2026' (reads better aloud); other text unchanged."""
+    from datetime import date
+    try:
+        d = date.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    return f"{d.strftime('%B')} {d.day}, {d.year}"
+
+
+def _hotel_when(req: dict) -> str:
+    """Always states both dates so the vendor hears the check-out without asking."""
+    if req.get("date") and req.get("check_out"):
+        return (f" with check-in on {_say_date(req['date'])} and check-out on {_say_date(req['check_out'])}"
+                f"{_nights(req)}")
+    return f" on {req['date']}" if req.get("date") else ""
+
+
 def _greeting(vendor: dict, requirements: dict) -> str:
-    """A short, warm opening line."""
+    """Just a hello; the first question confirms we reached the right place."""
+    return "Hello!"
+
+
+IDENTITY_PREFIX = "Am I speaking with"
+
+
+def _identity_question(vendor: dict) -> str:
+    return f"{IDENTITY_PREFIX} {vendor.get('name') or 'the right place'}?"
+
+
+def _intro(requirements: dict) -> str:
+    """Who we are and why we're calling, asked once identity is confirmed."""
     req = requirements
+    if req.get("vendor_type") == "hotel":
+        rooms, g = req.get("rooms"), req.get("guest_count")
+        return (f"Great, thank you. I'm helping a client book a stay{_hotel_when(req)}"
+                f"{f' for {g} guests' if g else ''}{f', needing {rooms} rooms' if rooms else ''}. "
+                f"Do you have a minute for a couple of quick questions?")
     g = req.get("guest_count")
     when = f" on {req.get('date')}" if req.get("date") else ""
     return (
-        f"Hi! I'm helping plan a {req.get('event_type', 'get-together')} for about "
+        f"Great, thank you. I'm helping plan a {req.get('event_type', 'get-together')} for about "
         f"{g or 'a few'} guests{when}. Do you have a minute for a couple of quick questions?"
     )
 
 
-def _questions(requirements: dict) -> list[str]:
+def _questions(vendor: dict, requirements: dict) -> list[str]:
     """A natural set of questions, asked one at a time.
 
     Pricing is asked FIRST (based on the group size) before we reveal our budget,
     then we negotiate toward the budget.
     """
     req = requirements
+    if req.get("vendor_type") == "hotel":
+        return [_identity_question(vendor), _intro(req)] + _hotel_questions(req)
     g = req.get("guest_count")
     when = f" on {req.get('date')}" if req.get("date") else ""
-    qs = [f"First, would you be available{when} for a group of about {g or 'this size'}?"]
+    qs = [_identity_question(vendor), _intro(req),
+          f"First, would you be available{when} for a group of about {g or 'this size'}?"]
 
     must = req.get("must_haves") or []
     if must:
@@ -112,10 +174,8 @@ def _questions(requirements: dict) -> list[str]:
     qs.append(f"For a group of around {g or 'that size'}, roughly what would it cost? "
               f"Do you have a per-person rate or a package?")
 
-    # Then negotiate toward our budget.
-    if req.get("budget"):
-        qs.append(f"I see. We're trying to stay around {req['budget']} in total — "
-                  f"is there any flexibility to make that work?")
+    # The budget is never volunteered: the webhook asks for a discount only if the
+    # vendor's quote turns out to exceed it (see backend/api.py, call plan).
 
     nice = req.get("nice_to_haves") or []
     if nice:
@@ -125,6 +185,57 @@ def _questions(requirements: dict) -> list[str]:
     qs.append("And who should we follow up with to confirm a booking?")
     qs.append("Anything else you'd like to share about your place before we wrap up?")
     return qs
+
+
+def _hotel_questions(req: dict) -> list[str]:
+    """Hotel call script: availability, nightly rate, budget, amenities, policy."""
+    rooms, g = req.get("rooms"), req.get("guest_count")
+    need = f"{rooms} rooms" if rooms else "a room"
+    qs = [f"First, do you have {need} available{_hotel_when(req)}"
+          f"{f' for {g} guests' if g else ''}?"]
+    must = req.get("must_haves") or []
+    if must:
+        pretty = ", ".join(str(m).replace("_", " ") for m in must)
+        qs.append(f"Great. We need {pretty} — does that come with the rooms?")
+    stay = (f" for check-in {_say_date(req['date'])} and check-out {_say_date(req['check_out'])}"
+            if req.get("date") and req.get("check_out") else "")
+    qs.append(f"What is the per night rate for one room{stay}, and does that include taxes?")
+    nice = req.get("nice_to_haves") or []
+    if nice:
+        pretty = ", ".join(str(n).replace("_", " ") for n in nice)
+        qs.append(f"Would you also be able to offer {pretty}?")
+    qs.append("What is your cancellation policy?")
+    qs.append("And who should we follow up with to confirm the booking?")
+    return qs
+
+
+def _budget_number(budget) -> float | None:
+    """First number in a budget string like '$8,000 USD' or '1,00,000'."""
+    import re
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(budget or ""))
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def _nights_count(req: dict) -> int:
+    from datetime import date
+    try:
+        return max(0, (date.fromisoformat(str(req["check_out"]))
+                       - date.fromisoformat(str(req["date"]))).days)
+    except (KeyError, ValueError):
+        return 0
+
+
+def _call_plan(questions: list[str], req: dict) -> dict:
+    """What the webhook needs to check the vendor's quote against the budget."""
+    hotel = req.get("vendor_type") == "hotel"
+    marker = "per night rate" if hotel else "roughly what would it cost"
+    idx = next((i for i, q in enumerate(questions) if marker in q), None)
+    return {
+        "price_idx": idx, "budget": _budget_number(req.get("budget")),
+        "mode": "hotel" if hotel else "restaurant",
+        "guests": req.get("guest_count") or 1, "rooms": req.get("rooms") or 1,
+        "nights": _nights_count(req) or 1,
+    }
 
 
 async def run_call(vendor: dict, requirements: dict, call_index: int = 0) -> str:
@@ -144,8 +255,9 @@ async def run_call(vendor: dict, requirements: dict, call_index: int = 0) -> str
         to = telephony.override_number_for(call_index) or vendor.get("phone")
         if to:
             greeting = _greeting(vendor, requirements)
-            questions = _questions(requirements)
-            res = await telephony.place_call(to, greeting, questions)
+            questions = _questions(vendor, requirements)
+            res = await telephony.place_call(to, greeting, questions,
+                                             plan=_call_plan(questions, requirements))
             if res.get("status") == "error":
                 return f"[Real call to {to} could not be placed: {res.get('error')}]"
             return (

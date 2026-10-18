@@ -15,12 +15,11 @@ Usage:  python scripts/test_api.py
 
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ["VENDOR_DB_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="vm_api_"), "api.db"
-)
+from mockfirestore import MockFirestore  # noqa: E402  in-memory Firestore, no GCP needed
+from engine_agent import firestore_db as _fs  # noqa: E402
+_fs.set_client(MockFirestore())
 
 import engine_agent.db as db                 # noqa: E402
 from backend.api import app                   # noqa: E402

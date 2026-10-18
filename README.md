@@ -99,7 +99,7 @@ engine_agent/    Engine Agent + Calling Agent + shared DB layer     [ADK]
   agent.py          engine root_agent and its tool wiring
   tools.py          match vendors, parallel vendor calls, summaries
   calling_agent.py  the per-vendor calling agent (one spawned per call)
-  db.py             shared SQLite store (requirements, calls, jobs, summaries)
+  db.py             shared Firestore store (requirements, calls, jobs, summaries)
 scheduler/       Cron job that spawns one engine agent per pending job
   cron.py           poll loop + retry handling (CLI)
   runner.py         runs the engine agent for a single request
@@ -107,8 +107,9 @@ backend/         FastAPI backend (register / summary / status endpoints)
 requirements.txt Python dependencies
 ```
 
-All components share one SQLite database. By default it is `cygnus/requirements.db`;
-override with the `VENDOR_DB_PATH` environment variable.
+All components share one Firestore database. Locally, run the Firestore emulator
+(`FIRESTORE_EMULATOR_HOST=localhost:8080`) or use a real project via
+`gcloud auth application-default login` + `GOOGLE_CLOUD_PROJECT`.
 
 ## Getting Started
 
@@ -132,12 +133,11 @@ pip install -r requirements.txt
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."   # required to run the agents
-# Optional — all components default to cygnus/requirements.db:
-export VENDOR_DB_PATH="/path/to/vendor_management.db"
+export GOOGLE_CLOUD_PROJECT="your-project"      # Firestore project
+# export FIRESTORE_EMULATOR_HOST=localhost:8080  # or use the local emulator
 ```
 
-The shared SQLite database and its sample vendor catalog are created automatically on
-first use — there is no separate migration step.
+Firestore collections are created implicitly on first write — there is no migration step.
 
 ### 3. Run the components
 
@@ -199,7 +199,7 @@ curl -X POST http://127.0.0.1:8000/requests/demo-1/status \
 | Variable | Applies to | Default | Purpose |
 | -------- | ---------- | ------- | ------- |
 | `ANTHROPIC_API_KEY` | all agents | — | Auth for the Claude model backend. |
-| `VENDOR_DB_PATH` | all components | `cygnus/requirements.db` | Shared SQLite database location. |
+| `GOOGLE_CLOUD_PROJECT` | all components | — | Firestore project (or use `FIRESTORE_EMULATOR_HOST`). |
 | `CRON_INTERVAL` | cron | `30` | Seconds between poll sweeps. |
 | `CRON_MAX_CONCURRENCY` | cron | `5` | Max engine agents run at once. |
 | `CRON_BATCH` | cron | `10` | Jobs claimed per sweep. |
