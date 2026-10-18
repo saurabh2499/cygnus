@@ -88,7 +88,8 @@ def _extract(location: str, requirements: dict, blob: str, limit: int) -> list[d
     hotel = _is_hotel(requirements)
     vocab = vocab_for("hotel" if hotel else "restaurant")
     if hotel:
-        what = ("accommodation " + scope, "real, named hotels that could host this stay")
+        what = ("accommodation " + scope, "real, named HOTELS (places with guest rooms to stay overnight; "
+                "exclude restaurants, cafes, bars and attractions) that could host this stay")
         extra = '"cuisine": str (hotel style, e.g. boutique/business/resort), '
     else:
         what = ("dining " + scope, "real, named restaurants or cafes that could host this event")
@@ -105,7 +106,8 @@ def _extract(location: str, requirements: dict, blob: str, limit: int) -> list[d
         f'"features": [subset of {vocab}], '
         '"trending_reason": str (why it is popular/trending, from the results), '
         '"source_url": str}\n'
-        "Only include venues that actually appear in the results. Do not invent "
+        "Only include venues that actually appear in the results"
+        f"{' and that are genuinely hotels' if hotel else ''}. Do not invent "
         "venues. Output JSON only, no prose.\n\n"
         f"SEARCH RESULTS:\n{blob[:12000]}"
     )

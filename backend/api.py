@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 from engine_agent import db
 
-from . import auth, notify
+from . import auth, call_helpers, notify
 
 app = FastAPI(title="Vendor Management API", version="0.1.0")
 
@@ -290,9 +290,19 @@ async def _confirm_booking(request_id: str, vendor_id: str) -> dict:
         subject = f"Booking confirmed: {vendor_name}"
         what = (f"Your hotel stay from {when} to {req.get('check_out', '?')}" if hotel
                 else f"Your {event} on {when} for about {guests} guests")
-        body = (f"Hi,\n\n{what} is confirmed with "
-                f"{vendor_name}.\n\nSummary:\n{result.get('final_summary', '')}\n\n"
-                f"We've also called the {'hotel' if hotel else 'restaurant'} to confirm.\n\n— Vendor Management")
+        entry = next((v for v in result.get("vendors", []) if v.get("vendor_id") == vendor_id), {})
+        pts = [str(f).replace("_", " ").capitalize() for f in (vendor.get("features") or [])]
+        pts += [str(c).capitalize() for c in (vendor.get("cuisine_types") or [])]
+        if vendor.get("area"):
+            pts.append(f"Located in {vendor['area']}")
+        # What the vendor told us on the call (rates, inclusions, policies), one point each.
+        pts += [x.strip().rstrip(".") for x in re.split(r"(?<=[.!?])\s+", entry.get("summary") or "")
+                if len(x.strip()) > 3]
+        points = "\n".join(f"  • {p}" for p in dict.fromkeys(pts)) or "  • Details will follow from the vendor"
+        body = (f"Hi,\n\n{what} is confirmed with {vendor_name}.\n\n"
+                f"Facilities & details:\n{points}\n\n"
+                f"We've also called the {'hotel' if hotel else 'restaurant'} to confirm.\n\n"
+                f"Thanks & Regards,\nCygnus")
         out["email"] = "sent" if notify.send_email(client_email, subject, body) else "failed"
     db.set_request_stage(request_id, "completed")
     return out
@@ -481,6 +491,23 @@ async def twiml_turn(request: Request) -> Response:
     if idx < len(questions):
         st.setdefault("answers", []).append(
             {"q": questions[idx], "a": speech or "(no response)"})
+        # Identity check: wrong place -> apologise and end the call.
+        if questions[idx].startswith(call_helpers.IDENTITY_PREFIX) and call_helpers.denies_identity(speech):
+            lines = [f"Agent: {st.get('greeting', '')}".strip()]
+            for qa in st["answers"]:
+                lines += [f"Agent: {qa['q']}", f"Vendor: {qa['a']}"]
+            lines.append("Agent: Sorry about that, I must have the wrong number. Goodbye.")
+            lines.append("[Wrong number: the vendor did not confirm it is the expected place.]")
+            st["transcript"] = "\n".join(l for l in lines if l)
+            st["status"] = "done"
+            db.set_call_state(token, st)
+            return _xml(f"<Response>{_say('Sorry about that, I must have the wrong number. Goodbye.')}<Hangup/></Response>")
+        # Quote vs. budget: only raise the budget if the quote goes over it.
+        if idx == st.get("price_idx") and st.get("budget") and speech:
+            total = call_helpers.quote_total(st, speech)
+            if total and total > st["budget"]:
+                questions.insert(idx + 1, call_helpers.discount_question(st, total))
+                st["questions"] = questions
         idx += 1
         st["idx"] = idx
         st["retried"] = False

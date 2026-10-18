@@ -305,6 +305,24 @@ def save_final_summary(request_id: str, final_summary: str,
         Confirmation that the final summary was saved.
     """
     db.init_db()
+    # Never drop a called vendor: ones the model left out (e.g. the call wasn't
+    # answered) are appended after the ranked ones, so the client still sees them.
+    ranking = list(ranking or [])
+    names = {v["id"]: v["name"] for v in db.list_vendors()}
+    ranked_ids = {r.get("vendor_id") for r in ranking}
+    next_rank = max([r.get("rank") or 0 for r in ranking], default=0) + 1
+    for c in db.get_calls(request_id):
+        vid = c["vendor_id"]
+        if vid in ranked_ids or c["status"] == "failed":
+            continue
+        ranking.append({"rank": next_rank, "vendor_id": vid,
+                        "vendor_name": names.get(vid, vid),
+                        "reason": "Call not answered or incomplete — availability and pricing unconfirmed."})
+        if not c["summary"]:
+            db.set_vendor_summary(request_id, vid,
+                                  "The call was not answered or ended early, so no availability "
+                                  "or pricing details were collected.", next_rank)
+        next_rank += 1
     db.set_final_summary(request_id, status="completed",
                          final_summary=final_summary, ranking=ranking)
     # Mirror ranks onto the per-vendor call records for easy lookup.

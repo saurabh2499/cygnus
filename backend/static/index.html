@@ -225,7 +225,11 @@
   .card > h2 { font-size:22px; text-transform:none; letter-spacing:0; color:var(--fg); border:0;
                padding:18px 18px 6px; font-weight:700; }
   .grid { grid-template-columns:minmax(260px,340px) 1fr; }
-  ul.reqlist { padding:6px 12px; }
+  .grid > section[aria-label="Requests"] { display:flex; flex-direction:column; position:sticky; top:84px;
+      height:calc(100vh - 110px); min-height:320px; }
+  ul.reqlist { padding:6px 12px; flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto; }
+  .newwrap { flex:none; border-top:1px solid var(--border); background:#fff; }
+  @media (max-width:860px){ .grid > section[aria-label="Requests"] { position:static; height:60vh; } }
   li.req { background:#f1f3f5; margin-bottom:10px; border-radius:10px; padding:13px 15px; gap:4px; }
   li.req:hover { background:#e9ecf1; border-color:transparent; }
   li.req.active { background:#e8effd; border-color:transparent; box-shadow:none; }
@@ -250,6 +254,8 @@
   .vendor .vname { font-weight:700; font-size:17px; min-width:150px; }
   .vendor .reason { flex:1; margin:0; color:var(--muted-fg); font-size:14.5px; }
   .vendor .vfoot { margin:0; }
+  .vendor .maplink { color:var(--primary); font-size:13.5px; font-weight:600; text-decoration:none; white-space:nowrap; }
+  .vendor .maplink:hover { text-decoration:underline; }
   .vendor .vfoot button { min-width:116px; justify-content:center; font-weight:600; padding:10px 16px;
                           background:#fff; border:1px solid var(--border); border-radius:8px; }
   .vendor .vfoot button.primary { background:#43a047; border-color:#43a047; color:#fff; }
@@ -490,8 +496,11 @@ async function loadDetail(){
       const v = summaries[r.vendor_id] || {};
       const approved = v.approved;
       const p = v.profile || {};
+      const mapUrl = "https://www.google.com/maps/search/?api=1&query=" +
+        encodeURIComponent([p.name || r.vendor_name, p.area, req.location].filter(Boolean).join(", "));
       const rows = [
         ["Type", p.vendor_type==="hotel" ? "Hotel" : "Restaurant"],
+        ["Location", `<a href="${mapUrl}" target="_blank" rel="noopener">View on Google Maps</a>`],
         ["Area", p.area], ["Cuisine / style", asList(p.cuisine_types)],
         ["Price tier", p.price_tier ? "$".repeat(p.price_tier) : ""],
         ["Rating", p.rating], ["Capacity", p.capacity], ["Phone", p.phone],
@@ -499,12 +508,13 @@ async function loadDetail(){
         ["About", p.description],
         ["Website", p.source_url ? `<a href="${esc(p.source_url)}" target="_blank" rel="noopener">${esc(p.source_url)}</a>` : ""],
       ].filter(([k,val]) => val !== "" && val != null);
-      const detailHtml = rows.map(([k,val]) => `<dt>${k}</dt><dd>${k==="Website"?val:esc(val)}</dd>`).join("");
+      const detailHtml = rows.map(([k,val]) => `<dt>${k}</dt><dd>${(k==="Website"||k==="Location")?val:esc(val)}</dd>`).join("");
       return `<div class="vendor ${r.rank===1?'top':''} ${openVendors.has(r.vendor_id)?'open':''}" data-vid="${esc(r.vendor_id)}">
         <div class="vrow" tabindex="0" role="button" aria-expanded="${openVendors.has(r.vendor_id)}">
           <span class="rank r${r.rank}">${r.rank}</span>
           <span class="vname">${esc(r.vendor_name || r.vendor_id)}</span>
           <span class="reason">${esc(r.reason||"")}</span>
+          <a class="maplink" href="${mapUrl}" target="_blank" rel="noopener" title="Open in Google Maps" onclick="event.stopPropagation()">📍 Map</a>
           ${approved ? `<span class="approved-tag">${CHECK} Approved</span>`:""}
           <span class="vfoot">
             ${approved

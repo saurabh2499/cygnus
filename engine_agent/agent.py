@@ -60,7 +60,9 @@ and save it with `save_vendor_summary(request_id, vendor_id, summary)`.
 Compare the vendors and call `save_final_summary(request_id, final_summary,
 ranking)`. Rank best-fit first, giving each vendor a 1-based `rank`, its
 `vendor_id`, `vendor_name`, and a one-line `reason`. Base the ranking on how well
-each vendor meets the must-haves first, then nice-to-haves, fit, and price. For
+each vendor meets the must-haves first, then nice-to-haves, fit, and price. Include
+EVERY called vendor in the ranking, putting vendors whose calls weren't answered
+last with a reason saying so. For
 hotels, "fit" means room availability for the stay dates and number of rooms, and
 price means the nightly rate versus the budget.
 
