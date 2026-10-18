@@ -1,4 +1,4 @@
-"""Offline validation for the vendor-management system.
+"""Offline validation for the Cygnus system.
 
 Exercises every component except the live LLM calls, so it runs fast and needs
 no ANTHROPIC_API_KEY:

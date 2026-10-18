@@ -1,4 +1,4 @@
-# Vendor Management
+# Cygnus
 
 A multi-agent system that gathers client requirements, reaches out to vendors on the
 client's behalf, and returns a ranked summary of the best-fit options.

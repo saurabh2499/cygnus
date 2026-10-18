@@ -1,4 +1,4 @@
-# Container for the Vendor Management backend (API + dashboard + TwiML webhooks).
+# Container for the Cygnus backend (API + dashboard + TwiML webhooks).
 # Deployed to Google Cloud Run. Cloud Run sets $PORT; uvicorn must bind to it.
 FROM python:3.12-slim
 

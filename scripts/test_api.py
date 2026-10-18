@@ -90,7 +90,7 @@ def main():
         root = c.get("/")
         check("GET /vendors returns the catalog", len(vendors) == 5, f"{len(vendors)} vendors")
         check("GET / serves the dashboard HTML",
-              root.status_code == 200 and "Vendor Management" in root.text,
+              root.status_code == 200 and "Cygnus" in root.text,
               f"{root.status_code}, {len(root.text)} bytes")
 
     print("-" * 56)

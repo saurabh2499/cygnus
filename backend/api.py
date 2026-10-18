@@ -1,4 +1,4 @@
-"""Backend API for the vendor-management system.
+"""Backend API for the Cygnus system.
 
 Endpoints (per the project spec):
   1. POST /requests                     register a request (called by the chatbot)
@@ -32,7 +32,7 @@ from engine_agent import db
 
 from . import auth, call_helpers, notify
 
-app = FastAPI(title="Vendor Management API", version="0.1.0")
+app = FastAPI(title="Cygnus API", version="0.1.0")
 
 _STATIC_DIR = Path(__file__).parent / "static"
 

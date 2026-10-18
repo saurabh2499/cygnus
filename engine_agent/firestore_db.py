@@ -1,4 +1,4 @@
-"""Firestore data layer — the 5 collections for the vendor-management system.
+"""Firestore data layer — the 5 collections for the Cygnus system.
 
 Firestore has no DDL; a collection exists once its first document is written.
 This module defines the collections, their document shape, and the CRUD helpers
