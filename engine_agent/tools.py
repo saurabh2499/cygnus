@@ -233,26 +233,29 @@ async def call_vendors(request_id: str, vendor_ids: list[str]) -> dict:
 
     semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
 
+    # Show the selected vendors in the dashboard right away, as "calling".
+    for v in to_call:
+        db.record_call(request_id, v["id"], status="calling")
+
     async def _one(vendor: dict, call_index: int):
         async with semaphore:
             try:
                 transcript = await run_call(vendor, requirements, call_index=call_index)
+                # Persist as soon as THIS call ends so the dashboard updates live.
+                db.record_call(request_id, vendor["id"], status="called", transcript=transcript)
                 return vendor["id"], transcript, None
             except Exception as exc:  # surface call failures per-vendor
+                db.record_call(request_id, vendor["id"], status="failed")
                 return vendor["id"], None, str(exc)
 
     results = await asyncio.gather(*[_one(v, i) for i, v in enumerate(to_call)])
 
-    # Persist sequentially (single writer) after the parallel calls complete.
     transcripts = []
     for vendor_id, transcript, error in results:
         if error:
-            db.record_call(request_id, vendor_id, status="failed")
             transcripts.append({"vendor_id": vendor_id, "status": "failed",
                                 "error": error})
         else:
-            db.record_call(request_id, vendor_id, status="called",
-                           transcript=transcript)
             transcripts.append({"vendor_id": vendor_id, "status": "called",
                                 "vendor_name": catalog[vendor_id]["name"],
                                 "transcript": transcript})

@@ -91,7 +91,7 @@ async def run_forever(cfg: CronConfig) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Vendor-management cron job")
+    parser = argparse.ArgumentParser(description="Cygnus cron job")
     parser.add_argument("--once", action="store_true",
                         help="run a single sweep and exit")
     parser.add_argument("--interval", type=int, help="seconds between sweeps")

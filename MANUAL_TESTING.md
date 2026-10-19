@@ -1,4 +1,4 @@
-# Manual Test Guide — Vendor Management
+# Manual Test Guide — Cygnus
 
 Follow top to bottom to exercise every component once, with a **validation** check
 after each step. Each step says what to run and what you should see (✅).

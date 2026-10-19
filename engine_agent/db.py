@@ -50,5 +50,9 @@ from .db_firestore import (  # noqa: F401
 )
 
 
+# Call override numbers live in Secret Manager, not Firestore.
+from .secret_store import get_call_overrides  # noqa: E402,F401
+
+
 def backend() -> str:
     return "firestore"

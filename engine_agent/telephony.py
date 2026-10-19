@@ -39,11 +39,18 @@ def is_configured() -> bool:
 
 
 def override_numbers() -> list[str]:
-    """Parsed CALL_OVERRIDE_NUMBER — a comma-separated list for test routing.
+    """Call override numbers for test routing: those added through the API, else
+    the CALL_OVERRIDE_NUMBER env var (comma-separated).
 
     e.g. "+1...A,+1...A,+1...B" routes the 1st & 2nd parallel calls to A and the
     3rd to B (useful for watching the parallel fan-out land on two phones).
     """
+    try:  # numbers in the Secret Manager secret win over the env var
+        stored = db.get_call_overrides()
+    except Exception:
+        stored = []
+    if stored:
+        return stored
     raw = os.environ.get("CALL_OVERRIDE_NUMBER", "") or ""
     return [n.strip() for n in raw.split(",") if n.strip()]
 
