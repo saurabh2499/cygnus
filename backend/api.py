@@ -112,6 +112,27 @@ def _current_user(request: Request) -> dict | None:
     return auth.public_user(user) if user else None
 
 
+def _require_user(request: Request) -> dict:
+    user = _current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    return user
+
+
+def _owner(requirements: dict | None) -> str:
+    """Who a request belongs to (older requests only carry client_email)."""
+    r = requirements or {}
+    return str(r.get("owner_email") or r.get("client_email") or "").lower()
+
+
+def _own_request_or_404(request_id: str, user: dict) -> dict:
+    """The request's result, or 404 when it doesn't exist or belongs to someone else."""
+    result = db.get_request_result(request_id)
+    if result is None or _owner(result.get("requirements")) != user["email"].lower():
+        raise HTTPException(status_code=404, detail=f"Unknown request {request_id}")
+    return result
+
+
 def _set_session(response: Response, email: str) -> None:
     response.set_cookie(auth.COOKIE_NAME, auth.make_token(email), httponly=True,
                         samesite="lax", max_age=60 * 60 * 24 * 7, path="/")
@@ -201,28 +222,27 @@ def register_request(payload: RegisterRequest, request: Request) -> RegisterResp
         if out and (out < date.today() or (event_date and out <= event_date)):
             raise HTTPException(status_code=400,
                                 detail="Check-out must be after the check-in date")
-    # Remember who to email on booking confirmation (the logged-in client).
-    user = _current_user(request)
-    if user and not requirements.get("client_email"):
-        requirements["client_email"] = user.get("email")
+    # Requests belong to the logged-in user, who is also emailed the confirmation.
+    user = _require_user(request)
+    requirements["owner_email"] = user["email"].lower()
+    if not requirements.get("client_email"):
+        requirements["client_email"] = user["email"]
     max_retries = payload.max_retries if payload.max_retries is not None else db.DEFAULT_MAX_RETRIES
     db.register_request(payload.request_id, requirements, max_retries)
     return RegisterResponse(request_id=payload.request_id, status="queued")
 
 
 @app.get("/requests/{request_id}/summary", response_model=SummaryResponse)
-def get_summary(request_id: str) -> SummaryResponse:
+def get_summary(request_id: str, request: Request) -> SummaryResponse:
     """Returns the processing status, final summary, ranking, and per-vendor results."""
-    result = db.get_request_result(request_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Unknown request {request_id}")
-    return SummaryResponse(**result)
+    return SummaryResponse(**_own_request_or_404(request_id, _require_user(request)))
 
 
 @app.post("/requests/{request_id}/status")
-async def update_status(request_id: str, payload: StatusUpdate) -> dict:
+async def update_status(request_id: str, payload: StatusUpdate, request: Request) -> dict:
     """Approves (or unapproves) a vendor. On approval, calls the restaurant to
     confirm the booking and emails the client a confirmation."""
+    _own_request_or_404(request_id, _require_user(request))
     if payload.approved:
         current = db.get_request_result(request_id) or {}
         other = next((v for v in current.get("vendors", [])
@@ -309,9 +329,11 @@ async def _confirm_booking(request_id: str, vendor_id: str) -> dict:
 
 
 @app.get("/requests")
-def list_requests() -> list[dict]:
-    """Lists every request with its job and result status (newest first)."""
-    return db.list_requests()
+def list_requests(request: Request) -> list[dict]:
+    """Lists the logged-in user's requests with job and result status (newest first)."""
+    me = _require_user(request)["email"].lower()
+    return [{k: v for k, v in r.items() if k != "owner_email"}
+            for r in db.list_requests() if r.get("owner_email") == me]
 
 
 @app.get("/vendors")

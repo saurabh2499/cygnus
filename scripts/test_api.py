@@ -4,7 +4,7 @@ Exercises all three spec endpoints plus the dashboard-support endpoints using
 FastAPI's TestClient against a throwaway database. No LLM, no cron, no network.
 
   POST /requests                      register + enqueue
-  GET  /requests                      list all
+  GET  /requests                      list the logged-in user's requests
   GET  /requests/{id}/summary         result view (pending -> completed)
   POST /requests/{id}/status          approve a vendor
   GET  /vendors                       catalog
@@ -39,8 +39,24 @@ REQS = {"event_type": "offsite dinner", "guest_count": 60, "location": "downtown
         "budget": "$8000", "must_haves": ["catering", "av"], "nice_to_haves": ["vegan"]}
 
 
+class FakeSecretManager:
+    """Minimal in-memory stand-in for the Secret Manager client (read side only)."""
+    def access_secret_version(self, name):
+        data = b"+919876543210,+919876543211"
+        return type("R", (), {"payload": type("P", (), {"data": data})()})()
+
+
 def main():
+    from engine_agent import secret_store
+    secret_store.set_client(FakeSecretManager())
     with TestClient(app) as c:
+        # 0. Requests need a logged-in user
+        anon = c.post("/requests", json={"request_id": "anon-1", "requirements": REQS})
+        check("POST /requests without login is rejected (401)", anon.status_code == 401,
+              str(anon.status_code))
+        c.post("/auth/signup", json={"email": "owner@example.com", "password": "pw12345",
+                                     "account_type": "individual"})
+
         # 1. Register
         reg = c.post("/requests", json={"request_id": "api-1", "requirements": REQS})
         check("POST /requests registers and enqueues (201)",
@@ -84,6 +100,27 @@ def main():
         c1 = c.get("/requests/nope/summary").status_code
         c2 = c.post("/requests/api-1/status", json={"vendor_id": "ghost"}).status_code
         check("404 for unknown request and unknown vendor", c1 == 404 and c2 == 404, f"{c1}/{c2}")
+
+        # 7b. Requests are private to their owner
+        with TestClient(app) as other:
+            other.post("/auth/signup", json={"email": "other@example.com", "password": "pw12345",
+                                             "account_type": "individual"})
+            seen = other.get("/requests").json()
+            check("another user does not see the request in the list",
+                  all(r["request_id"] != "api-1" for r in seen), f"{len(seen)} request(s)")
+            check("another user gets 404 for the summary and for approving",
+                  other.get("/requests/api-1/summary").status_code == 404 and
+                  other.post("/requests/api-1/status",
+                             json={"vendor_id": "v_olive"}).status_code == 404)
+
+        # 7c. Call override numbers come from Secret Manager; the API exposes no endpoint for them
+        from engine_agent import telephony
+        check("telephony dials the Secret Manager numbers",
+              telephony.override_number_for(0) == "+919876543210" and
+              telephony.override_number_for(5) == "+919876543211")
+        check("the API has no call-override endpoint",
+              c.get("/settings/call-override").status_code == 404 and
+              c.post("/settings/call-override", json={"number": "+919876543210"}).status_code == 404)
 
         # 8. Catalog + dashboard
         vendors = c.get("/vendors").json()

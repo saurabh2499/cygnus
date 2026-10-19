@@ -119,6 +119,8 @@ def main() -> int:
     from backend.api import app
 
     with TestClient(app) as client:
+        client.post("/auth/signup", json={"email": "validate@example.com", "password": "pw12345",
+                                          "account_type": "individual"})
         reg = client.post("/requests", json={"request_id": "api-1", "requirements": reqs})
         pending = client.get("/requests/api-1/summary")
         missing = client.get("/requests/does-not-exist/summary")

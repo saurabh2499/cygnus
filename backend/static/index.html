@@ -141,6 +141,18 @@
   .vendor .vfoot { margin-top:12px; display:flex; align-items:center; gap:10px; }
   .approved-tag { color:var(--s-done-fg); font-weight:600; font-size:12.5px; display:inline-flex; gap:5px; align-items:center; }
 
+  .callrow { display:flex; align-items:center; gap:12px; padding:12px 15px; margin-bottom:9px; border-radius:10px;
+             background:#f1f3f5; font-size:15.5px; }
+  .callrow .cname { font-weight:700; } .callrow .carea { color:var(--muted-fg); font-size:13.5px; flex:1; }
+  .callrow .cst { font-weight:600; font-size:13.5px; color:var(--muted-fg); }
+  .callrow .cdot { width:10px; height:10px; border-radius:50%; background:#94a3b8; flex:none; position:relative; }
+  .callrow.calling { background:#e8f3ea; } .callrow.calling .cst { color:#166534; }
+  .callrow.calling .cdot { background:var(--green); }
+  .callrow.calling .cdot::after { content:""; position:absolute; inset:-5px; border-radius:50%; border:2px solid var(--green);
+                                  animation:cring 1.2s infinite; }
+  @keyframes cring { from { transform:scale(.6); opacity:1; } to { transform:scale(1.9); opacity:0; } }
+  .callrow.done .cdot { background:var(--green); } .callrow.done .cst { color:#166534; }
+  .callrow.failed .cdot { background:var(--red,#dc2626); } .callrow.failed .cst { color:#b91c1c; }
   .processing { display:flex; align-items:center; gap:11px; color:var(--muted-fg); padding:10px 0; }
   .spin { width:16px; height:16px; border:2px solid var(--border); border-top-color:var(--primary);
           border-radius:50%; animation:rot .8s linear infinite; flex:none; }
@@ -439,7 +451,11 @@ function toast(msg){
 
 async function loadList(){
   let data;
-  try { data = await (await fetch("/requests")).json(); } catch { return; }
+  try {
+    const res = await fetch("/requests");
+    if (res.status === 401){ showAuth(); return; }   // session expired: back to login
+    data = await res.json();
+  } catch { return; }
   const json = JSON.stringify(data);
   if (json === lastListJSON) return;
   lastListJSON = json;
@@ -486,6 +502,17 @@ async function loadDetail(){
       <div class="final" style="border-left-color:var(--s-fail-fg)">This request failed. Please try again.</div>`;
   } else if (status !== "completed"){
     body += `<div class="processing"><span class="spin"></span> ${(STATUS[status]||["Working"])[0]}…</div>`;
+    const called = d.vendors || [];
+    if (called.length){
+      body += `<div class="section-title">Selected ${req.vendor_type==="hotel"?"hotels":"restaurants"}</div>` + called.map(v => {
+        const p = v.profile || {};
+        const st = v.status === "calling" ? ["calling", "Calling now…"]
+                 : v.status === "failed" ? ["failed", "Call failed"] : ["done", "Call finished"];
+        return `<div class="callrow ${st[0]}"><span class="cdot"></span>
+          <span class="cname">${esc(p.name || v.vendor_id)}</span>
+          <span class="carea">${esc(p.area || "")}</span><span class="cst">${st[1]}</span></div>`;
+      }).join("");
+    }
   } else {
     body += `<div class="section-title">Final summary</div><div class="final">${esc(d.final_summary||"")}</div>`;
     const ranking = d.ranking || [];

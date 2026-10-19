@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+import http.cookiejar
 import urllib.error
 import urllib.request
 
@@ -35,6 +36,21 @@ from google.adk.runners import InMemoryRunner  # noqa: E402
 from google.genai import types                # noqa: E402
 
 API = "http://127.0.0.1:8000"
+E2E_USER = {"email": "e2e@example.com", "password": "pw12345", "account_type": "individual"}
+_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+
+def login():
+    """Logs in (signing up first if needed): the API only shows a user their own requests."""
+    for path, body in (("/auth/login", {"email": E2E_USER["email"], "password": E2E_USER["password"]}),
+                       ("/auth/signup", E2E_USER)):
+        try:
+            req = urllib.request.Request(API + path, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            _opener.open(req, timeout=10).read()
+            return
+        except urllib.error.HTTPError:
+            continue
 TURNS = [
     ("Hi! I'm planning a company offsite dinner for about 60 people in downtown "
      "Chicago, indoors, on December 12, 2026. Budget around $8000 USD. Must-haves "
@@ -45,7 +61,7 @@ TURNS = [
 
 
 def api_get(path):
-    with urllib.request.urlopen(API + path, timeout=10) as r:
+    with _opener.open(API + path, timeout=10) as r:
         return r.status, json.loads(r.read())
 
 
@@ -53,7 +69,7 @@ def api_post(path, body):
     req = urllib.request.Request(
         API + path, data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with _opener.open(req, timeout=10) as r:
         return r.status, json.loads(r.read())
 
 
@@ -91,12 +107,18 @@ def main():
         print("ANTHROPIC_API_KEY not set — needed for the chatbot and engine.")
         return 1
 
+    login()
     ok = True
     print("STEP 1 — Chatbot: gather + approve  (real LLM)\n" + "-" * 60)
     rid = asyncio.run(run_chatbot())
     ok &= check("1. chatbot approved and issued a request_id", bool(rid), rid or "none")
     if not rid:
         return 1
+
+    # The chatbot has no logged-in user, so hand the request to the test user.
+    from engine_agent import firestore_db as _fs
+    reqs = db.get_requirements(rid) or {}
+    _fs.update_request(rid, requirements_payload={**reqs, "owner_email": E2E_USER["email"]})
 
     # Confirm it was enqueued (chatbot -> shared DB wiring)
     status, summ = api_get(f"/requests/{rid}/summary")

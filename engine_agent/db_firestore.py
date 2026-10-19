@@ -317,6 +317,7 @@ def list_requests() -> list[dict]:
         final = fs.get_final_summary(req["id"])
         rows.append({
             "request_id": req["id"],
+            "owner_email": (reqs.get("owner_email") or reqs.get("client_email") or "").lower(),
             "vendor_type": reqs.get("vendor_type") or "restaurant",
             "event_type": reqs.get("event_type"),
             "guest_count": reqs.get("guest_count"),
